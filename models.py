@@ -1,0 +1,70 @@
+from __future__ import annotations
+from typing import Optional
+from pydantic import BaseModel, field_validator
+import re
+
+
+class Requirements(BaseModel):
+    space: str
+    doorType: str
+    thickness: Optional[int] = None
+    features: list[str] = []
+    budgetMin: Optional[int] = None
+    budgetMax: Optional[int] = None
+
+
+class Recommendation(BaseModel):
+    id: str
+    brand: str
+    name: str
+    sku: str
+    price: float
+    needsGateway: bool = False
+    total: float
+
+
+class Customer(BaseModel):
+    nombre: str
+    ciudad: Optional[str] = None
+    telefono: str
+    cantidad: str = "1"
+    cotizacionFormal: bool = False
+    razonSocial: Optional[str] = None
+    rut: Optional[str] = None
+
+    @field_validator("telefono")
+    @classmethod
+    def normalize_phone(cls, v: str) -> str:
+        digits = re.sub(r"\D", "", v)
+        if digits.startswith("56") and len(digits) == 11:
+            return f"+{digits}"
+        if digits.startswith("9") and len(digits) == 9:
+            return f"+56{digits}"
+        if digits.startswith("0") and len(digits) == 10:
+            return f"+56{digits[1:]}"
+        return f"+{digits}" if not v.startswith("+") else v
+
+
+class LeadPayload(BaseModel):
+    source: str
+    name: str
+    phone: str
+    requirements: Requirements
+    recommendation: Recommendation
+    customer: Customer
+
+
+class LeadResponse(BaseModel):
+    ok: bool
+    partner_id: Optional[int] = None
+    lead_id: Optional[int] = None
+    sale_order_id: Optional[int] = None
+    odoo_lead_url: Optional[str] = None
+    odoo_sale_url: Optional[str] = None
+    message: str
+
+
+class SendTemplateRequest(BaseModel):
+    to: str
+    template: str
+    params: list[str] = []

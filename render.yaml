@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: digitalseg-backend
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    plan: free
+    envVars:
+      - key: ODOO_URL
+        value: https://digitalseg1.odoo.com
+      - key: ODOO_DB
+        value: digitalseg1
+      - key: ODOO_USER
+        value: contacto@digitalseg.cl
+      - key: ODOO_SOURCE
+        value: "13"
+      - key: DIGITALSEG_ALLOWED_ORIGIN
+        value: https://digitalseg.cl
+      - key: ODOO_APIKEY
+        sync: false
+      - key: META_PHONE_NUMBER_ID
+        sync: false
+      - key: META_ACCESS_TOKEN
+        sync: false
+      - key: META_APP_SECRET
+        sync: false
+      - key: META_VERIFY_TOKEN
+        sync: false
