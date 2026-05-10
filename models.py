@@ -68,3 +68,56 @@ class SendTemplateRequest(BaseModel):
     to: str
     template: str
     params: list[str] = []
+
+
+# ── Agenda ────────────────────────────────────────────────────────────────────
+
+class VisitaRequest(BaseModel):
+    nombre: str
+    telefono: str
+    direccion: Optional[str] = None
+    proyecto: str = "Hogar"
+    fecha: str   # "2026-05-12"
+    hora: int    # 10
+
+    @field_validator("telefono")
+    @classmethod
+    def normalize_phone(cls, v: str) -> str:
+        digits = re.sub(r"\D", "", v)
+        if digits.startswith("56") and len(digits) == 11:
+            return f"+{digits}"
+        if digits.startswith("9") and len(digits) == 9:
+            return f"+56{digits}"
+        if digits.startswith("0") and len(digits) == 10:
+            return f"+56{digits[1:]}"
+        return f"+{digits}" if not v.startswith("+") else v
+
+
+class ImplementacionRequest(BaseModel):
+    cliente: str
+    direccion: Optional[str] = None
+    producto: Optional[str] = None
+    fecha: str   # "2026-05-14"
+    hora: int    # 9
+    duracion: int = 2
+
+
+class AgendaEvent(BaseModel):
+    id: int
+    type: str
+    fecha: str
+    hora: int
+    duracion: int
+    cliente: str
+    telefono: Optional[str] = None
+    direccion: Optional[str] = None
+    proyecto: Optional[str] = None
+    producto: Optional[str] = None
+
+
+class AgendaBookingResponse(BaseModel):
+    ok: bool
+    message: str
+    event: Optional[AgendaEvent] = None
+    whatsapp_sent: bool = False
+    odoo_event_id: Optional[int] = None

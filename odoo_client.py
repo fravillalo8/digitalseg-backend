@@ -136,6 +136,28 @@ class OdooClient:
 
         return order_id
 
+    # ── Calendar events ──────────────────────────────────────────────────────────
+
+    def create_calendar_event(
+        self,
+        name: str,
+        start_dt: str,       # "2026-05-12 10:00:00" UTC
+        stop_dt: str,
+        description: str = "",
+        location: str = "",
+        partner_id: Optional[int] = None,
+    ) -> int:
+        vals: dict[str, Any] = {
+            "name": name,
+            "start": start_dt,
+            "stop": stop_dt,
+            "description": description,
+            "location": location,
+        }
+        if partner_id:
+            vals["partner_ids"] = [(4, partner_id)]
+        return self._exec("calendar.event", "create", [vals])
+
     # ── URL helpers ─────────────────────────────────────────────────────────────
 
     def lead_url(self, lead_id: int) -> str:
