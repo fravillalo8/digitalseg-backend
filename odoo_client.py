@@ -1,18 +1,22 @@
 from __future__ import annotations
 import os
 import xmlrpc.client
+import httpx
 from functools import cached_property
 from typing import Any, Optional
 
 
 class OdooClient:
     def __init__(self) -> None:
-        self.url    = os.environ["ODOO_URL"]
-        self.db     = os.environ["ODOO_DB"]
-        self.user   = os.environ["ODOO_USER"]
-        self.apikey = os.environ["ODOO_APIKEY"]
+        self.url       = os.environ["ODOO_URL"]
+        self.db        = os.environ["ODOO_DB"]
+        self.user      = os.environ["ODOO_USER"]
+        self.apikey    = os.environ["ODOO_APIKEY"]
         self.source_id = int(os.getenv("ODOO_SOURCE", "13"))
         self._uid: Optional[int] = None
+        # Si ODOO_PROXY_URL está definido, todas las llamadas van por el proxy PHP
+        self._proxy_url    = os.getenv("ODOO_PROXY_URL", "")
+        self._proxy_secret = os.getenv("PROXY_SECRET", "ds_proxy_2026_secret")
 
     @cached_property
     def _common(self) -> xmlrpc.client.ServerProxy:
@@ -25,15 +29,33 @@ class OdooClient:
     @property
     def uid(self) -> int:
         if self._uid is None:
-            self._uid = self._common.authenticate(self.db, self.user, self.apikey, {})
-            if not self._uid:
-                raise RuntimeError("Odoo authentication failed")
+            if self._proxy_url:
+                self._uid = 2  # el proxy maneja auth internamente
+            else:
+                self._uid = self._common.authenticate(self.db, self.user, self.apikey, {})
+                if not self._uid:
+                    raise RuntimeError("Odoo authentication failed")
         return self._uid
 
     def _exec(self, model: str, method: str, args: list, kwargs: dict = {}) -> Any:
+        if self._proxy_url:
+            return self._exec_via_proxy(model, method, args, kwargs)
         return self._models.execute_kw(
             self.db, self.uid, self.apikey, model, method, args, kwargs
         )
+
+    def _exec_via_proxy(self, model: str, method: str, args: list, kwargs: dict) -> Any:
+        resp = httpx.post(
+            self._proxy_url,
+            headers={"X-Proxy-Secret": self._proxy_secret},
+            json={"model": model, "method": method, "args": args, "kwargs": kwargs},
+            timeout=25,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if not data.get("ok"):
+            raise RuntimeError(data.get("error", "Proxy error"))
+        return data["result"]
 
     # ── Partners ────────────────────────────────────────────────────────────────
 
