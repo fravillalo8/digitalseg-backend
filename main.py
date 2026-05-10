@@ -26,7 +26,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     global odoo, wa
     odoo = OdooClient()
     wa   = WhatsAppClient()
-    log.info("Odoo uid=%s | WhatsApp configurado=%s", odoo.uid, wa._configured)
+    try:
+        log.info("Odoo uid=%s | WhatsApp configurado=%s", odoo.uid, wa._configured)
+    except Exception as e:
+        log.warning("Odoo auth en startup falló (se reintentará por request): %s", e)
     yield
 
 
