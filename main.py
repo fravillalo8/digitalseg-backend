@@ -33,7 +33,7 @@ wa: WhatsAppClient
 # permanente en Render y apuntar AGENDA_DATA_FILE a él.
 
 AGENDA_DATA_FILE = Path(os.getenv("AGENDA_DATA_FILE", "agenda_data.json"))
-_agenda_lock = asyncio.Lock()
+_agenda_lock: asyncio.Lock
 _agenda_events: list[AgendaEvent] = []
 _agenda_next_id: int = 100
 
@@ -93,9 +93,10 @@ def _fecha_hora_label(fecha: str, hora: int) -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    global odoo, wa
+    global odoo, wa, _agenda_lock
     odoo = OdooClient()
     wa   = WhatsAppClient()
+    _agenda_lock = asyncio.Lock()
     _load_agenda()
     try:
         log.info("Odoo uid=%s | WhatsApp configurado=%s", odoo.uid, wa._configured)
