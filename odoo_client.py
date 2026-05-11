@@ -98,6 +98,13 @@ class OdooClient:
         )
         return ids[0] if ids else None
 
+    def check_stock(self, sku: str) -> float:
+        ids = self._exec("product.product", "search", [[["default_code", "=", sku]]])
+        if not ids:
+            return 0.0
+        data = self._exec("product.product", "read", [ids[:1]], {"fields": ["qty_available"]})
+        return float(data[0].get("qty_available", 0)) if data else 0.0
+
     # ── CRM Leads ───────────────────────────────────────────────────────────────
 
     def create_lead(
@@ -148,12 +155,20 @@ class OdooClient:
         product_name: str,
         price: float,
         quantity: int,
+        commitment_date: Optional[str] = None,
+        note: str = "",
     ) -> int:
-        order_id = self._exec("sale.order", "create", [{
+        order_vals: dict[str, Any] = {
             "partner_id": partner_id,
             "state": "draft",
             "user_id": self.salesperson_id,
-        }])
+        }
+        if commitment_date:
+            order_vals["commitment_date"] = commitment_date
+        if note:
+            order_vals["note"] = note
+
+        order_id = self._exec("sale.order", "create", [order_vals])
 
         self._exec("sale.order.line", "create", [{
             "order_id": order_id,
@@ -164,6 +179,20 @@ class OdooClient:
         }])
 
         return order_id
+
+    def send_quotation_email(self, order_id: int) -> bool:
+        template_ids = self._exec(
+            "mail.template", "search",
+            [[["model", "=", "sale.order"], ["name", "ilike", "quotation"]]]
+        )
+        if not template_ids:
+            return False
+        self._exec(
+            "mail.template", "send_mail",
+            [[template_ids[0]], order_id],
+            {"force_send": True}
+        )
+        return True
 
     # ── Calendar events ──────────────────────────────────────────────────────────
 

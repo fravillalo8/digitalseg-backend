@@ -176,9 +176,51 @@ async def create_lead(payload: LeadPayload, request: Request) -> LeadResponse:
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Error creando oportunidad en Odoo: {e}")
 
-    # 3. Cotización formal (si la pidió)
+    # 3. Cotización automática si hay email (con stock check y fecha de entrega)
     sale_order_id = None
-    if c.cotizacionFormal:
+    email_sent = False
+    if c.email:
+        stock_qty = 0.0
+        try:
+            stock_qty = odoo.check_stock(rec.sku)
+        except Exception as e:
+            log.warning("No se pudo verificar stock de '%s': %s", rec.sku, e)
+
+        in_stock      = stock_qty >= 1
+        delivery_days = 2 if in_stock else 5
+        commit_dt     = (datetime.utcnow() + timedelta(days=delivery_days)).strftime("%Y-%m-%d 12:00:00")
+        stock_note    = (
+            f"Stock disponible: {stock_qty:.0f} unidades — entrega/instalación estimada: {delivery_days} días hábiles."
+            if in_stock else
+            f"Producto sin stock — entrega/instalación estimada: {delivery_days} días hábiles."
+        )
+        log.info("Stock '%s': %.0f uds | entrega: %d días | commit: %s", rec.sku, stock_qty, delivery_days, commit_dt)
+
+        product_id = odoo.find_product(rec.sku)
+        if not product_id:
+            log.warning("SKU '%s' no existe en Odoo — cotización sin producto vinculado", rec.sku)
+        try:
+            sale_order_id = odoo.create_sale_order(
+                partner_id=partner_id,
+                product_id=product_id or 1,
+                product_name=f"{rec.brand} {rec.name}",
+                price=rec.price,
+                quantity=quantity,
+                commitment_date=commit_dt,
+                note=stock_note,
+            )
+            log.info("Sale order id=%s creada", sale_order_id)
+        except Exception as e:
+            log.error("Error creando cotización: %s", e)
+
+        if sale_order_id:
+            try:
+                email_sent = odoo.send_quotation_email(sale_order_id)
+                log.info("Email cotización enviado=%s para order id=%s", email_sent, sale_order_id)
+            except Exception as e:
+                log.error("Error enviando email de cotización: %s", e)
+
+    elif c.cotizacionFormal:
         product_id = odoo.find_product(rec.sku)
         if not product_id:
             log.warning("SKU '%s' no existe en Odoo — cotización sin producto vinculado", rec.sku)
