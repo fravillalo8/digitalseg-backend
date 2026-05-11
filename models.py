@@ -95,11 +95,24 @@ class VisitaRequest(BaseModel):
 
 class ImplementacionRequest(BaseModel):
     cliente: str
+    telefono: Optional[str] = None
     direccion: Optional[str] = None
     producto: Optional[str] = None
     fecha: str   # "2026-05-14"
     hora: int    # 9
     duracion: int = 2
+
+    @field_validator("telefono", mode="before")
+    @classmethod
+    def normalize_phone_impl(cls, v: str | None) -> str | None:
+        if not v:
+            return None
+        digits = re.sub(r"\D", "", v)
+        if digits.startswith("56") and len(digits) == 11:
+            return f"+{digits}"
+        if digits.startswith("9") and len(digits) == 9:
+            return f"+56{digits}"
+        return f"+{digits}" if not v.startswith("+") else v
 
 
 class AgendaEvent(BaseModel):
@@ -113,6 +126,7 @@ class AgendaEvent(BaseModel):
     direccion: Optional[str] = None
     proyecto: Optional[str] = None
     producto: Optional[str] = None
+    whatsapp_sent: bool = False
 
 
 class AgendaBookingResponse(BaseModel):

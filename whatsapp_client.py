@@ -106,6 +106,30 @@ class WhatsAppClient:
             }],
         )
 
+    def instalacion_programada(
+        self, to: str, nombre: str, fecha_hora: str, producto: str, direccion: str
+    ) -> dict:
+        """
+        instalacion_programada
+        {{1}} nombre  {{2}} fecha y hora  {{3}} producto  {{4}} dirección
+        Template sugerido:
+        "Hola {{1}}, tu instalación DigitalSeg quedó programada para {{2}}.
+         Producto: {{3}}. Nuestro técnico llegará a {{4}}. Ante cualquier duda escríbenos."
+        """
+        return self.send_template(
+            to=to,
+            template_name="instalacion_programada",
+            components=[{
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "text": nombre},
+                    {"type": "text", "text": fecha_hora},
+                    {"type": "text", "text": producto or "Cerradura Digital"},
+                    {"type": "text", "text": direccion or "tu domicilio"},
+                ],
+            }],
+        )
+
     def cotizacion_lista(
         self, to: str, nombre: str, producto: str, total: str
     ) -> dict:

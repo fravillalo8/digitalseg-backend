@@ -395,6 +395,7 @@ async def book_implementacion(
             hora=req.hora,
             duracion=req.duracion,
             cliente=req.cliente,
+            telefono=req.telefono,
             direccion=req.direccion,
             producto=req.producto,
         )
@@ -405,6 +406,11 @@ async def book_implementacion(
     # Evento en Odoo Calendar
     odoo_event_id = None
     try:
+        partner_id = None
+        if req.telefono:
+            partner_id = odoo.find_or_create_partner(
+                name=req.cliente, phone=req.telefono, city=req.direccion
+            )
         stop_hora = req.hora + req.duracion
         start_dt  = f"{req.fecha} {req.hora:02d}:00:00"
         stop_dt   = f"{req.fecha} {stop_hora:02d}:00:00"
@@ -412,17 +418,36 @@ async def book_implementacion(
             name=f"Instalación — {req.cliente} · {req.producto or 'Digitalseg'}",
             start_dt=start_dt,
             stop_dt=stop_dt,
-            description=f"Producto: {req.producto or '-'}\nDirección: {req.direccion or '-'}",
+            description=f"Producto: {req.producto or '-'}\nDirección: {req.direccion or '-'}\nTel: {req.telefono or '-'}",
             location=req.direccion or "",
+            partner_id=partner_id,
         )
         log.info("Odoo calendar.event id=%s creado (impl) para %s", odoo_event_id, req.cliente)
     except Exception as exc:
         log.warning("Odoo calendar no creado (no bloquea): %s", exc)
 
+    # WhatsApp: instalacion_programada (solo si hay teléfono)
+    wa_sent = False
+    if req.telefono:
+        try:
+            fecha_label = _fecha_hora_label(req.fecha, req.hora)
+            wa.instalacion_programada(
+                to=req.telefono,
+                nombre=req.cliente,
+                fecha_hora=fecha_label,
+                producto=req.producto or "Cerradura Digital",
+                direccion=req.direccion or "",
+            )
+            wa_sent = True
+            log.info("WhatsApp instalacion_programada enviado a %s", req.telefono)
+        except Exception as exc:
+            log.warning("WhatsApp impl no enviado (no bloquea): %s", exc)
+
     return AgendaBookingResponse(
         ok=True,
         message="Implementación registrada correctamente",
         event=event,
+        whatsapp_sent=wa_sent,
         odoo_event_id=odoo_event_id,
     )
 
