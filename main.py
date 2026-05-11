@@ -6,7 +6,7 @@ import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import AsyncIterator
+from typing import AsyncIterator, Optional
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -369,7 +369,7 @@ async def book_visita(req: VisitaRequest) -> AgendaBookingResponse:
 @app.post("/api/agenda/implementacion", response_model=AgendaBookingResponse)
 async def book_implementacion(
     req: ImplementacionRequest,
-    x_admin_key: str | None = Header(default=None),
+    x_admin_key: Optional[str] = Header(default=None),
 ) -> AgendaBookingResponse:
     admin_key = os.getenv("AGENDA_ADMIN_KEY", "")
     if admin_key and x_admin_key != admin_key:
