@@ -17,7 +17,7 @@ class OdooClient:
         self._uid: Optional[int] = None
         # Si ODOO_PROXY_URL está definido, todas las llamadas van por el proxy PHP
         self._proxy_url    = os.getenv("ODOO_PROXY_URL", "")
-        self._proxy_secret = os.getenv("PROXY_SECRET", "ds_proxy_2026_secret")
+        self._proxy_secret = os.getenv("PROXY_SECRET", "")
 
     @cached_property
     def _common(self) -> xmlrpc.client.ServerProxy:
@@ -132,6 +132,7 @@ class OdooClient:
             "source_id": self.source_id,
             "description": desc,
             "user_id": self.salesperson_id,
+            "expected_revenue": price * quantity,
         }
         return self._exec("crm.lead", "create", [vals])
 
