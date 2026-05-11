@@ -27,6 +27,7 @@ class Customer(BaseModel):
     nombre: str
     ciudad: Optional[str] = None
     telefono: str
+    email: Optional[str] = None
     cantidad: str = "1"
     cotizacionFormal: bool = False
     razonSocial: Optional[str] = None
@@ -135,3 +136,26 @@ class AgendaBookingResponse(BaseModel):
     event: Optional[AgendaEvent] = None
     whatsapp_sent: bool = False
     odoo_event_id: Optional[int] = None
+
+
+# ── Pago MercadoPago ──────────────────────────────────────────────────────────
+
+class PagoRequest(BaseModel):
+    cliente: str
+    telefono: str
+    producto: str
+    sku: Optional[str] = None
+    precio: int
+    cantidad: int = 1
+    gateway: bool = False
+    lead_id: Optional[int] = None
+    ref: Optional[str] = None
+
+
+class PagoResponse(BaseModel):
+    ok: bool
+    preference_id: str
+    init_point: str
+    sandbox_init_point: str
+    total: int
+    ref: str

@@ -4,6 +4,7 @@ import json
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import AsyncIterator, Optional
@@ -14,15 +15,32 @@ load_dotenv()
 from fastapi import FastAPI, HTTPException, Header, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
+import httpx
+
 from models import (
     LeadPayload, LeadResponse, SendTemplateRequest,
     VisitaRequest, ImplementacionRequest, AgendaEvent, AgendaBookingResponse,
+    PagoRequest, PagoResponse,
 )
 from odoo_client import OdooClient
 from whatsapp_client import WhatsAppClient
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 log = logging.getLogger(__name__)
+
+# ── Rate limiting in-memory (por IP) ─────────────────────────────────────────
+_rate_store: dict[str, list[datetime]] = defaultdict(list)
+_RATE_WINDOW = timedelta(minutes=10)
+_RATE_MAX    = 10
+
+
+def _check_rate(request: Request) -> None:
+    ip  = request.client.host if request.client else "unknown"
+    now = datetime.utcnow()
+    _rate_store[ip] = [t for t in _rate_store[ip] if now - t < _RATE_WINDOW]
+    if len(_rate_store[ip]) >= _RATE_MAX:
+        raise HTTPException(status_code=429, detail="Demasiadas solicitudes. Espera unos minutos.")
+    _rate_store[ip].append(now)
 
 odoo: OdooClient
 wa: WhatsAppClient
@@ -118,7 +136,8 @@ app.add_middleware(
 # ── POST /api/leads ─────────────────────────────────────────────────────────────
 
 @app.post("/api/leads", response_model=LeadResponse)
-async def create_lead(payload: LeadPayload) -> LeadResponse:
+async def create_lead(payload: LeadPayload, request: Request) -> LeadResponse:
+    _check_rate(request)
     c   = payload.customer
     rec = payload.recommendation
     req = payload.requirements
@@ -152,6 +171,7 @@ async def create_lead(payload: LeadPayload) -> LeadResponse:
             source_label=payload.source,
             quantity=quantity,
             needs_gateway=rec.needsGateway,
+            email=c.email,
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Error creando oportunidad en Odoo: {e}")
@@ -231,8 +251,20 @@ async def whatsapp_webhook(request: Request) -> dict:
 
 
 def _update_lead_from_whatsapp(msg: dict) -> None:
-    """Agrega nota al lead de Odoo que coincide con el número de teléfono."""
+    """Agrega nota al lead de Odoo y reenvía el mensaje al operador."""
     phone = f"+{msg['from']}" if not msg["from"].startswith("+") else msg["from"]
+
+    # 1. Notificar al operador en su teléfono
+    try:
+        wa.notificar_operador(
+            from_name=msg["name"] or phone,
+            from_phone=phone,
+            text=msg["text"] or f"[{msg.get('type','desconocido')}]",
+        )
+    except Exception as e:
+        log.warning("No se pudo reenviar mensaje al operador: %s", e)
+
+    # 2. Registrar nota en el lead de Odoo
     try:
         ids = odoo._exec(
             "crm.lead", "search",
@@ -240,7 +272,7 @@ def _update_lead_from_whatsapp(msg: dict) -> None:
             {"limit": 1},
         )
         if not ids:
-            log.info("Sin lead activo para %s — mensaje ignorado", phone)
+            log.info("Sin lead activo para %s — solo se reenvió al operador", phone)
             return
 
         note = (
@@ -289,14 +321,18 @@ async def send_template(req: SendTemplateRequest) -> dict:
 # ── GET /api/agenda — lista todos los eventos ────────────────────────────────
 
 @app.get("/api/agenda", response_model=list[AgendaEvent])
-async def get_agenda() -> list[AgendaEvent]:
+async def get_agenda(x_admin_key: Optional[str] = Header(default=None)) -> list[AgendaEvent]:
+    admin_key = os.getenv("AGENDA_ADMIN_KEY", "")
+    if admin_key and x_admin_key != admin_key:
+        raise HTTPException(status_code=401, detail="X-Admin-Key inválido")
     return _agenda_events
 
 
 # ── POST /api/agenda/visita — registra una visita técnica ────────────────────
 
 @app.post("/api/agenda/visita", response_model=AgendaBookingResponse)
-async def book_visita(req: VisitaRequest) -> AgendaBookingResponse:
+async def book_visita(req: VisitaRequest, request: Request) -> AgendaBookingResponse:
+    _check_rate(request)
     global _agenda_next_id
 
     async with _agenda_lock:
@@ -452,8 +488,195 @@ async def book_implementacion(
     )
 
 
+# ── MercadoPago config ────────────────────────────────────────────────────────
+
+MP_ACCESS_TOKEN = os.getenv("MP_ACCESS_TOKEN", "")
+MP_BACK_URL     = os.getenv("MP_BACK_URL", "https://digitalseg.cl")
+MP_WEBHOOK_URL  = os.getenv("MP_WEBHOOK_URL", "")
+MP_API          = "https://api.mercadopago.com"
+
+
+# ── POST /api/pagos/crear ─────────────────────────────────────────────────────
+
+@app.post("/api/pagos/crear", response_model=PagoResponse)
+async def crear_pago(req: PagoRequest, request: Request) -> PagoResponse:
+    _check_rate(request)
+
+    if not MP_ACCESS_TOKEN:
+        raise HTTPException(
+            status_code=503,
+            detail="MercadoPago no configurado. Agrega MP_ACCESS_TOKEN al backend.",
+        )
+
+    gateway_price = 59990
+    total = int(req.precio) * req.cantidad + (gateway_price if req.gateway else 0)
+    ref   = req.ref or f"DS-{req.sku or 'prod'}-{int(datetime.utcnow().timestamp())}"
+
+    items: list[dict] = [{
+        "id":         req.sku or "digitalseg-producto",
+        "title":      req.producto,
+        "quantity":   req.cantidad,
+        "unit_price": int(req.precio),
+        "currency_id": "CLP",
+    }]
+    if req.gateway:
+        items.append({
+            "id":         "digitalseg-gateway-g2",
+            "title":      "Gateway G2 (WiFi Bridge)",
+            "quantity":   1,
+            "unit_price": gateway_price,
+            "currency_id": "CLP",
+        })
+
+    preference_body: dict = {
+        "items": items,
+        "payer": {"name": req.cliente},
+        "external_reference": ref,
+        "back_urls": {
+            "success": f"{MP_BACK_URL}/pago-exitoso",
+            "failure": f"{MP_BACK_URL}/pago-cancelado",
+            "pending": f"{MP_BACK_URL}/pago-pendiente",
+        },
+        "auto_return": "approved",
+        "statement_descriptor": "DIGITALSEG",
+        "metadata": {
+            "lead_id":  req.lead_id,
+            "cliente":  req.cliente,
+            "telefono": req.telefono,
+        },
+    }
+    if MP_WEBHOOK_URL:
+        preference_body["notification_url"] = MP_WEBHOOK_URL
+
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.post(
+                f"{MP_API}/checkout/preferences",
+                headers={
+                    "Authorization": f"Bearer {MP_ACCESS_TOKEN}",
+                    "Content-Type":  "application/json",
+                },
+                json=preference_body,
+                timeout=15,
+            )
+            r.raise_for_status()
+            data = r.json()
+    except httpx.HTTPStatusError as exc:
+        log.error("MP preferences error %s: %s", exc.response.status_code, exc.response.text)
+        raise HTTPException(status_code=502, detail=f"MercadoPago error: {exc.response.text}")
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    log.info("MP preference creada: %s | ref=%s | total=%d", data["id"], ref, total)
+
+    # WhatsApp: enviar link de pago (no bloquea)
+    if req.telefono:
+        try:
+            wa.pago_link(
+                to=req.telefono,
+                nombre=req.cliente,
+                producto=req.producto,
+                total=f"${total:,}".replace(",", "."),
+                link=data["init_point"],
+            )
+        except Exception as exc:
+            log.warning("WA pago_link no enviado: %s", exc)
+
+    # Odoo: agregar nota al lead (no bloquea)
+    if req.lead_id:
+        try:
+            nota = (
+                f"<p><b>💳 Pago iniciado</b></p>"
+                f"<p>Ref: {ref} | Total: ${total:,} CLP | MP preference: {data['id']}</p>"
+            )
+            odoo._exec("crm.lead", "message_post", [[req.lead_id]], {"body": nota})
+        except Exception as exc:
+            log.warning("Odoo lead nota pago: %s", exc)
+
+    return PagoResponse(
+        ok=True,
+        preference_id=data["id"],
+        init_point=data["init_point"],
+        sandbox_init_point=data.get("sandbox_init_point", ""),
+        total=total,
+        ref=ref,
+    )
+
+
+# ── POST /api/pagos/webhook — IPN MercadoPago ─────────────────────────────────
+
+@app.post("/api/pagos/webhook")
+async def pago_webhook(request: Request) -> dict:
+    try:
+        body = await request.json()
+    except Exception:
+        return {"ok": True}
+
+    log.info("MP webhook recibido: type=%s", body.get("type"))
+
+    if body.get("type") != "payment":
+        return {"ok": True, "ignored": True}
+
+    payment_id = str(body.get("data", {}).get("id", ""))
+    if not payment_id or not MP_ACCESS_TOKEN:
+        return {"ok": True}
+
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.get(
+                f"{MP_API}/v1/payments/{payment_id}",
+                headers={"Authorization": f"Bearer {MP_ACCESS_TOKEN}"},
+                timeout=15,
+            )
+            r.raise_for_status()
+            payment = r.json()
+    except Exception as exc:
+        log.error("Error consultando pago %s: %s", payment_id, exc)
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    status       = payment.get("status", "")
+    metadata     = payment.get("metadata", {})
+    cliente      = metadata.get("cliente", "")
+    telefono     = metadata.get("telefono", "")
+    lead_id_raw  = metadata.get("lead_id")
+    ext_ref      = payment.get("external_reference", "")
+
+    log.info("Pago %s: status=%s | cliente=%s | ref=%s", payment_id, status, cliente, ext_ref)
+
+    if status == "approved":
+        # Odoo: agregar nota de pago confirmado + intentar marcar como ganado
+        if lead_id_raw:
+            try:
+                lead_id = int(lead_id_raw)
+                nota = (
+                    f"<p><b>✅ Pago aprobado</b></p>"
+                    f"<p>payment_id: {payment_id} | ref: {ext_ref}</p>"
+                )
+                odoo._exec("crm.lead", "message_post", [[lead_id]], {"body": nota})
+                try:
+                    odoo._exec("crm.lead", "action_set_won_rainbowman", [[lead_id]])
+                except Exception:
+                    pass
+            except Exception as exc:
+                log.warning("Odoo update pago aprobado: %s", exc)
+
+        # WhatsApp: confirmar pago al cliente
+        if telefono:
+            try:
+                wa.pago_confirmado(to=telefono, nombre=cliente)
+            except Exception as exc:
+                log.warning("WA pago_confirmado no enviado: %s", exc)
+
+    return {"ok": True, "payment_id": payment_id, "status": status}
+
+
 # ── Health ──────────────────────────────────────────────────────────────────────
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok", "odoo": "connected", "whatsapp": wa._configured}
+    return {
+        "status":    "ok",
+        "odoo":      "connected",
+        "whatsapp":  wa._configured,
+        "mercadopago": bool(MP_ACCESS_TOKEN),
+    }

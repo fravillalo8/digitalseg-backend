@@ -111,6 +111,7 @@ class OdooClient:
         source_label: str,
         quantity: int = 1,
         needs_gateway: bool = False,
+        email: Optional[str] = None,
     ) -> int:
         features = ", ".join(requirements.get("features", []))
         desc = (
@@ -134,6 +135,8 @@ class OdooClient:
             "user_id": self.salesperson_id,
             "expected_revenue": price * quantity,
         }
+        if email:
+            vals["email_from"] = email
         return self._exec("crm.lead", "create", [vals])
 
     # ── Sale Orders ─────────────────────────────────────────────────────────────
