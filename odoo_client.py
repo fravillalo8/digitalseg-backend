@@ -8,11 +8,12 @@ from typing import Any, Optional
 
 class OdooClient:
     def __init__(self) -> None:
-        self.url       = os.environ["ODOO_URL"]
-        self.db        = os.environ["ODOO_DB"]
-        self.user      = os.environ["ODOO_USER"]
-        self.apikey    = os.environ["ODOO_APIKEY"]
-        self.source_id = int(os.getenv("ODOO_SOURCE", "13"))
+        self.url            = os.environ["ODOO_URL"]
+        self.db             = os.environ["ODOO_DB"]
+        self.user           = os.environ["ODOO_USER"]
+        self.apikey         = os.environ["ODOO_APIKEY"]
+        self.source_id      = int(os.getenv("ODOO_SOURCE", "13"))
+        self.salesperson_id = int(os.getenv("ODOO_SALESPERSON_ID", "6"))  # Sebastian Cabrera
         self._uid: Optional[int] = None
         # Si ODOO_PROXY_URL está definido, todas las llamadas van por el proxy PHP
         self._proxy_url    = os.getenv("ODOO_PROXY_URL", "")
@@ -130,6 +131,7 @@ class OdooClient:
             "type": "opportunity",
             "source_id": self.source_id,
             "description": desc,
+            "user_id": self.salesperson_id,
         }
         return self._exec("crm.lead", "create", [vals])
 
@@ -146,6 +148,7 @@ class OdooClient:
         order_id = self._exec("sale.order", "create", [{
             "partner_id": partner_id,
             "state": "draft",
+            "user_id": self.salesperson_id,
         }])
 
         self._exec("sale.order.line", "create", [{
