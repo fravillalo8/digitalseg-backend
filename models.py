@@ -159,3 +159,18 @@ class PagoResponse(BaseModel):
     sandbox_init_point: str
     total: int
     ref: str
+
+
+# ── Informe de Seguridad ──────────────────────────────────────────────────────
+
+class InformeSeguridad(BaseModel):
+    nombre: str
+    telefono: str
+    email: Optional[str] = None
+    score: int
+    nivel: str
+    zona: Optional[str] = None
+    tipo_propiedad: Optional[str] = None
+    respuestas: dict = {}
+    findings: list[str] = []
+    recs: list[str] = []

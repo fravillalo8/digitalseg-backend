@@ -3,6 +3,9 @@ import os
 import json
 import asyncio
 import logging
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from contextlib import asynccontextmanager
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -20,7 +23,7 @@ import httpx
 from models import (
     LeadPayload, LeadResponse, SendTemplateRequest,
     VisitaRequest, ImplementacionRequest, AgendaEvent, AgendaBookingResponse,
-    PagoRequest, PagoResponse,
+    PagoRequest, PagoResponse, InformeSeguridad,
 )
 from odoo_client import OdooClient
 from whatsapp_client import WhatsAppClient
@@ -125,11 +128,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="DigitalSeg Backend", lifespan=lifespan)
 
+_cors_origins: list[str] = [
+    o.strip()
+    for o in os.getenv("DIGITALSEG_ALLOWED_ORIGIN", "https://digitalseg.cl").split(",")
+    if o.strip()
+]
+# Orígenes locales para test-compra.html abierto desde Live Server o file://
+_cors_origins += [
+    "http://localhost:5500",
+    "http://127.0.0.1:5500",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "null",  # file:// protocol
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[os.getenv("DIGITALSEG_ALLOWED_ORIGIN", "https://digitalseg.cl")],
+    allow_origins=_cors_origins,
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_methods=["POST", "GET", "OPTIONS"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "X-Admin-Key"],
+    allow_credentials=False,
 )
 
 
@@ -235,7 +254,7 @@ async def create_lead(payload: LeadPayload, request: Request) -> LeadResponse:
         except Exception as e:
             log.error("Error creando cotización: %s", e)
 
-    # 4. WhatsApp: confirmar solicitud recibida
+    # 4. WhatsApp: confirmar solicitud recibida al cliente
     try:
         wa.solicitud_recibida(
             to=phone,
@@ -246,6 +265,19 @@ async def create_lead(payload: LeadPayload, request: Request) -> LeadResponse:
         )
     except Exception as e:
         log.warning("WhatsApp no enviado (no bloquea): %s", e)
+
+    # 5. WhatsApp: notificar a ventas (Sebastián) del nuevo lead
+    try:
+        wa.notificar_lead_nuevo(
+            nombre=c.nombre,
+            telefono=phone,
+            ciudad=c.ciudad or "",
+            producto=f"{rec.brand} {rec.name}",
+            precio=rec.price,
+            odoo_url=odoo.lead_url(lead_id),
+        )
+    except Exception as e:
+        log.warning("Notificación ventas no enviada (no bloquea): %s", e)
 
     return LeadResponse(
         ok=True,
@@ -710,6 +742,119 @@ async def pago_webhook(request: Request) -> dict:
                 log.warning("WA pago_confirmado no enviado: %s", exc)
 
     return {"ok": True, "payment_id": payment_id, "status": status}
+
+
+# ── Email helper ─────────────────────────────────────────────────────────────
+
+def _send_email(subject: str, html: str, to_addresses: list[str]) -> None:
+    host = os.getenv("SMTP_HOST", "smtp.hostinger.com")
+    port = int(os.getenv("SMTP_PORT", "587"))
+    user = os.getenv("SMTP_USER", "")
+    pwd  = os.getenv("SMTP_PASS", "")
+    if not user or not pwd:
+        log.warning("SMTP no configurado — email no enviado")
+        return
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"]    = user
+    msg["To"]      = ", ".join(to_addresses)
+    msg.attach(MIMEText(html, "html", "utf-8"))
+    with smtplib.SMTP(host, port) as s:
+        s.ehlo()
+        s.starttls()
+        s.login(user, pwd)
+        s.sendmail(user, to_addresses, msg.as_string())
+    log.info("Email enviado a %s: %s", to_addresses, subject)
+
+
+# ── POST /api/informe-seguridad ───────────────────────────────────────────────
+
+_INFORME_RECIPIENTS = ["sebastian.cabrera@digitalseg.cl", "contacto@digitalseg.cl"]
+
+@app.post("/api/informe-seguridad")
+async def informe_seguridad(req: InformeSeguridad, request: Request) -> dict:
+    _check_rate(request)
+
+    nivel_color = {"Bajo": "#e74c3c", "Medio": "#f39c12", "Alto": "#27ae60"}.get(req.nivel, "#555")
+
+    findings_html = "".join(f"<li>{f}</li>" for f in req.findings) if req.findings else "<li>Sin hallazgos críticos</li>"
+    recs_html     = "".join(f"<li>{r}</li>" for r in req.recs)     if req.recs     else "<li>Mantener el nivel actual</li>"
+    respuestas_html = "".join(
+        f"<tr><td style='padding:6px 12px;border-bottom:1px solid #eee'>{k}</td>"
+        f"<td style='padding:6px 12px;border-bottom:1px solid #eee'><b>{v}</b></td></tr>"
+        for k, v in req.respuestas.items()
+    )
+
+    html = f"""
+<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"></head>
+<body style="font-family:Arial,sans-serif;background:#f5f5f5;padding:24px;margin:0">
+<div style="max-width:620px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.1)">
+  <div style="background:#0a0a0a;padding:28px 32px;text-align:center">
+    <h1 style="color:#fff;margin:0;font-size:22px">DigitalSeg — Informe de Seguridad</h1>
+    <p style="color:#aaa;margin:6px 0 0;font-size:14px">Calculadora de Seguridad Inteligente</p>
+  </div>
+  <div style="padding:28px 32px">
+    <h2 style="margin:0 0 4px;font-size:18px">Hola, {req.nombre}</h2>
+    <p style="color:#555;margin:0 0 20px;font-size:14px">
+      Tel: {req.telefono}{f" | Email: {req.email}" if req.email else ""}
+      {f" | Zona: {req.zona}" if req.zona else ""}
+      {f" | Propiedad: {req.tipo_propiedad}" if req.tipo_propiedad else ""}
+    </p>
+
+    <div style="text-align:center;margin:20px 0">
+      <div style="display:inline-block;background:#f9f9f9;border-radius:50%;width:100px;height:100px;line-height:100px;font-size:36px;font-weight:bold;color:{nivel_color};border:4px solid {nivel_color}">
+        {req.score}
+      </div>
+      <p style="margin:10px 0 0;font-size:18px;font-weight:bold;color:{nivel_color}">Nivel {req.nivel}</p>
+    </div>
+
+    <h3 style="color:#0a0a0a;border-bottom:2px solid #eee;padding-bottom:8px">⚠️ Hallazgos</h3>
+    <ul style="color:#555;padding-left:20px;line-height:1.8">{findings_html}</ul>
+
+    <h3 style="color:#0a0a0a;border-bottom:2px solid #eee;padding-bottom:8px">✅ Recomendaciones</h3>
+    <ul style="color:#555;padding-left:20px;line-height:1.8">{recs_html}</ul>
+
+    {"<h3 style='color:#0a0a0a;border-bottom:2px solid #eee;padding-bottom:8px'>📋 Respuestas del cuestionario</h3><table style='width:100%;border-collapse:collapse;font-size:13px'>" + respuestas_html + "</table>" if req.respuestas else ""}
+  </div>
+  <div style="background:#f5f5f5;padding:16px 32px;text-align:center;font-size:12px;color:#888">
+    DigitalSeg — Cerraduras inteligentes Valle del Aconcagua · digitalseg.cl
+  </div>
+</div>
+</body></html>
+"""
+
+    subject = f"[Informe] {req.nombre} — Score {req.score} ({req.nivel})"
+
+    try:
+        _send_email(subject=subject, html=html, to_addresses=_INFORME_RECIPIENTS)
+    except Exception as exc:
+        log.error("Error enviando informe de seguridad: %s", exc)
+
+    # Crear lead en Odoo (no bloquea)
+    try:
+        partner_id = odoo.find_or_create_partner(
+            name=req.nombre,
+            phone=req.telefono,
+            city=req.zona,
+        )
+        desc = f"Score: {req.score} | Nivel: {req.nivel}\nZona: {req.zona or '-'} | Propiedad: {req.tipo_propiedad or '-'}"
+        odoo.create_lead(
+            partner_id=partner_id,
+            phone=req.telefono,
+            product_name="Calculadora Seguridad",
+            sku="CALC-SEG",
+            price=0,
+            requirements=req.respuestas,
+            source_label="calculadora",
+            quantity=1,
+            needs_gateway=False,
+            email=req.email,
+        )
+        log.info("Lead Odoo creado desde calculadora para %s", req.nombre)
+    except Exception as exc:
+        log.warning("Odoo lead calculadora no creado (no bloquea): %s", exc)
+
+    return {"ok": True, "message": "Informe enviado"}
 
 
 # ── Health ──────────────────────────────────────────────────────────────────────

@@ -31,6 +31,70 @@ class WhatsAppClient:
         received = signature_header.removeprefix("sha256=")
         return hmac.compare_digest(expected, received)
 
+    # ── Envío de texto libre (ventana 24h) ──────────────────────────────────────
+
+    def send_text(self, to: str, text: str) -> dict:
+        """Envía mensaje de texto libre. Solo funciona dentro de la ventana de 24h
+        (el número destino debe haber enviado un mensaje en las últimas 24h)."""
+        if not self._configured:
+            log.warning("WhatsApp no configurado — texto no enviado a %s", to)
+            return {"skipped": True}
+
+        resp = httpx.post(
+            f"{GRAPH_URL}/{self.phone_number_id}/messages",
+            headers={"Authorization": f"Bearer {self.access_token}"},
+            json={
+                "messaging_product": "whatsapp",
+                "to": to,
+                "type": "text",
+                "text": {"body": text},
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        log.info("Texto enviado a %s → %s", to, resp.json())
+        return resp.json()
+
+    # ── Notificación al operador ─────────────────────────────────────────────────
+
+    def notificar_operador(self, from_name: str, from_phone: str, text: str) -> dict:
+        """Reenvía al operador (OWNER_NOTIFY_PHONE) cuando llega un mensaje de cliente."""
+        owner = os.getenv("OWNER_NOTIFY_PHONE", "")
+        if not owner:
+            log.warning("OWNER_NOTIFY_PHONE no configurado — notificación omitida")
+            return {"skipped": True, "reason": "OWNER_NOTIFY_PHONE no definido"}
+        msg = (
+            f"📩 *Nuevo mensaje de cliente*\n"
+            f"*De:* {from_name} ({from_phone})\n\n"
+            f"{text}"
+        )
+        return self.send_text(to=owner, text=msg)
+
+    def notificar_lead_nuevo(
+        self,
+        nombre: str,
+        telefono: str,
+        ciudad: str,
+        producto: str,
+        precio: float,
+        odoo_url: str = "",
+    ) -> dict:
+        """Notifica a SALES_NOTIFY_PHONE (Sebastián) cuando llega un lead nuevo del cotizador."""
+        sales = os.getenv("SALES_NOTIFY_PHONE", "")
+        if not sales:
+            log.warning("SALES_NOTIFY_PHONE no configurado — notificación de ventas omitida")
+            return {"skipped": True, "reason": "SALES_NOTIFY_PHONE no definido"}
+        msg = (
+            f"🔔 *Nuevo lead — Cotizador DigitalSeg*\n\n"
+            f"*Cliente:* {nombre}\n"
+            f"*Teléfono:* {telefono}\n"
+            f"*Ciudad:* {ciudad or 'No indicada'}\n"
+            f"*Producto:* {producto}\n"
+            f"*Precio:* ${precio:,.0f}".replace(",", ".") + "\n"
+            + (f"\n🔗 {odoo_url}" if odoo_url else "")
+        )
+        return self.send_text(to=sales, text=msg)
+
     # ── Envío de plantillas ──────────────────────────────────────────────────────
 
     def send_template(
@@ -146,6 +210,43 @@ class WhatsAppClient:
                     {"type": "text", "text": nombre},
                     {"type": "text", "text": producto},
                     {"type": "text", "text": total},
+                ],
+            }],
+        )
+
+    def pago_link(
+        self, to: str, nombre: str, producto: str, total: str, link: str
+    ) -> dict:
+        """
+        pago_link_digitalseg
+        {{1}} nombre  {{2}} producto  {{3}} total  {{4}} link de pago
+        """
+        return self.send_template(
+            to=to,
+            template_name="pago_link_digitalseg",
+            components=[{
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "text": nombre},
+                    {"type": "text", "text": producto},
+                    {"type": "text", "text": total},
+                    {"type": "text", "text": link},
+                ],
+            }],
+        )
+
+    def pago_confirmado(self, to: str, nombre: str) -> dict:
+        """
+        pago_confirmado_digitalseg
+        {{1}} nombre
+        """
+        return self.send_template(
+            to=to,
+            template_name="pago_confirmado_digitalseg",
+            components=[{
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "text": nombre},
                 ],
             }],
         )
