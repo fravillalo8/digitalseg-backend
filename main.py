@@ -133,23 +133,33 @@ _cors_origins: list[str] = [
     for o in os.getenv("DIGITALSEG_ALLOWED_ORIGIN", "https://digitalseg.cl").split(",")
     if o.strip()
 ]
-# Orígenes locales para test-compra.html abierto desde Live Server o file://
-_cors_origins += [
-    "http://localhost:5500",
-    "http://127.0.0.1:5500",
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "null",  # file:// protocol
-]
+
+_dev_mode = os.getenv("APP_ENV", "production") == "development"
+if _dev_mode:
+    _cors_origins += [
+        "http://localhost:5500",
+        "http://127.0.0.1:5500",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "null",
+    ]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
-    allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?" if _dev_mode else r"^$",
     allow_methods=["POST", "GET", "OPTIONS"],
     allow_headers=["Content-Type", "X-Admin-Key"],
     allow_credentials=False,
 )
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
 
 
 # ── POST /api/leads ─────────────────────────────────────────────────────────────
@@ -234,8 +244,28 @@ async def create_lead(payload: LeadPayload, request: Request) -> LeadResponse:
 
         if sale_order_id:
             try:
-                email_sent = odoo.send_quotation_email(sale_order_id)
-                log.info("Email cotización enviado=%s para order id=%s", email_sent, sale_order_id)
+                html = _build_cotizacion_html(
+                    nombre=c.nombre,
+                    producto=f"{rec.brand} {rec.name}",
+                    sku=rec.sku,
+                    price=rec.price,
+                    quantity=quantity,
+                    in_stock=in_stock,
+                    delivery_days=delivery_days,
+                    odoo_url=odoo.sale_url(sale_order_id),
+                )
+                _send_email(
+                    subject=f"Tu cotización DigitalSeg — {rec.brand} {rec.name}",
+                    html=html,
+                    to_addresses=[c.email],
+                )
+                _send_email(
+                    subject=f"[Lead] {c.nombre} — {rec.brand} {rec.name} × {quantity}",
+                    html=html,
+                    to_addresses=_INFORME_RECIPIENTS,
+                )
+                email_sent = True
+                log.info("Email cotización enviado al cliente %s y al equipo", c.email)
             except Exception as e:
                 log.error("Error enviando email de cotización: %s", e)
 
@@ -744,7 +774,95 @@ async def pago_webhook(request: Request) -> dict:
     return {"ok": True, "payment_id": payment_id, "status": status}
 
 
-# ── Email helper ─────────────────────────────────────────────────────────────
+# ── Email helpers ─────────────────────────────────────────────────────────────
+
+def _build_cotizacion_html(
+    nombre: str,
+    producto: str,
+    sku: str,
+    price: float,
+    quantity: int,
+    in_stock: bool,
+    delivery_days: int,
+    odoo_url: str,
+) -> str:
+    total = price * quantity
+    stock_badge = (
+        "<span style='background:#27ae60;color:#fff;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:bold'>✓ En stock</span>"
+        if in_stock else
+        "<span style='background:#f39c12;color:#fff;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:bold'>⏳ Por pedido</span>"
+    )
+    precio_fmt  = f"${price:,.0f}".replace(",", ".")
+    total_fmt   = f"${total:,.0f}".replace(",", ".")
+    wa_url = "https://wa.me/56978522980?text=Hola%2C+acabo+de+recibir+mi+cotizaci%C3%B3n+y+quiero+avanzar"
+    return f"""<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f0f0f0;font-family:Arial,sans-serif">
+<div style="max-width:600px;margin:32px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,.12)">
+
+  <div style="background:#0a0a0a;padding:32px;text-align:center">
+    <p style="margin:0 0 4px;color:#4A90E2;font-size:11px;letter-spacing:.15em;font-weight:700;text-transform:uppercase">Cerraduras Inteligentes</p>
+    <h1 style="margin:0;color:#fff;font-size:26px;font-weight:900;letter-spacing:.02em">DIGITAL<span style="color:#27AE60">SEG</span></h1>
+    <p style="margin:8px 0 0;color:#888;font-size:13px">Valle del Aconcagua · digitalseg.cl</p>
+  </div>
+
+  <div style="padding:32px">
+    <h2 style="margin:0 0 6px;font-size:20px;color:#0a0a0a">Hola, {nombre} 👋</h2>
+    <p style="margin:0 0 24px;color:#555;font-size:15px;line-height:1.6">
+      Aquí está tu cotización según el análisis de compatibilidad del cotizador inteligente.<br>
+      Revisa los detalles y contáctanos cuando quieras avanzar.
+    </p>
+
+    <div style="background:#f8f9fa;border:1px solid #e0e0e0;border-radius:12px;padding:24px;margin-bottom:24px">
+      <div style="margin-bottom:12px">{stock_badge}</div>
+      <h3 style="margin:0 0 4px;font-size:17px;color:#0a0a0a">{producto}</h3>
+      <p style="margin:0 0 16px;color:#888;font-size:12px;letter-spacing:.05em">SKU: {sku}</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:14px">
+        <tr>
+          <td style="padding:8px 0;color:#555;border-bottom:1px solid #eee">Precio unitario</td>
+          <td style="padding:8px 0;text-align:right;font-weight:700;color:#0a0a0a;border-bottom:1px solid #eee">{precio_fmt}</td>
+        </tr>
+        <tr>
+          <td style="padding:8px 0;color:#555;border-bottom:1px solid #eee">Cantidad</td>
+          <td style="padding:8px 0;text-align:right;font-weight:700;color:#0a0a0a;border-bottom:1px solid #eee">{quantity}</td>
+        </tr>
+        <tr>
+          <td style="padding:12px 0 0;color:#0a0a0a;font-weight:bold;font-size:16px">Total</td>
+          <td style="padding:12px 0 0;text-align:right;font-weight:900;font-size:20px;color:#27AE60">{total_fmt}</td>
+        </tr>
+      </table>
+    </div>
+
+    <div style="background:#e8f5e9;border-left:4px solid #27ae60;border-radius:0 8px 8px 0;padding:16px;margin-bottom:24px">
+      <p style="margin:0;font-size:14px;color:#1b5e20">
+        <strong>🚚 Entrega e instalación estimada:</strong> {delivery_days} días hábiles
+        {"— producto disponible en bodega." if in_stock else "— coordinamos desde el pedido."}
+      </p>
+    </div>
+
+    <p style="font-size:13px;color:#777;margin:0 0 20px;line-height:1.6">
+      Esta cotización es referencial. Los precios finales pueden variar según instalación y accesorios requeridos.
+      <a href="{odoo_url}" style="color:#4A90E2">Ver cotización en sistema →</a>
+    </p>
+
+    <div style="text-align:center;margin:28px 0 8px">
+      <a href="{wa_url}"
+         style="display:inline-block;background:#25D366;color:#fff;text-decoration:none;padding:14px 32px;border-radius:50px;font-weight:700;font-size:15px">
+        💬 Consultar por WhatsApp
+      </a>
+    </div>
+    <p style="text-align:center;font-size:12px;color:#aaa;margin:10px 0 0">
+      También puedes llamarnos al +56 9 7852 2980
+    </p>
+  </div>
+
+  <div style="background:#f5f5f5;padding:16px 32px;text-align:center;font-size:11px;color:#aaa">
+    DigitalSeg Seguridad Inteligente · Valle del Aconcagua · digitalseg.cl
+  </div>
+</div>
+</body></html>"""
+
 
 def _send_email(subject: str, html: str, to_addresses: list[str]) -> None:
     host = os.getenv("SMTP_HOST", "smtp.hostinger.com")
