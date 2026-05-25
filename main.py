@@ -595,7 +595,8 @@ async def book_implementacion(
 # ── MercadoPago config ────────────────────────────────────────────────────────
 
 MP_ACCESS_TOKEN = os.getenv("MP_ACCESS_TOKEN", "")
-MP_BACK_URL     = os.getenv("MP_BACK_URL", "https://digitalseg.cl")
+_mp_back_raw    = os.getenv("MP_BACK_URL", "https://digitalseg.cl").rstrip("/")
+MP_BACK_URL     = _mp_back_raw if "digitalseg" in _mp_back_raw else "https://digitalseg.cl"
 MP_WEBHOOK_URL  = os.getenv("MP_WEBHOOK_URL", "")
 MP_API          = "https://api.mercadopago.com"
 
@@ -637,9 +638,9 @@ async def crear_pago(req: PagoRequest, request: Request) -> PagoResponse:
         "payer": {"name": req.cliente},
         "external_reference": ref,
         "back_urls": {
-            "success": f"{MP_BACK_URL}/pago-exitoso",
-            "failure": f"{MP_BACK_URL}/pago-cancelado",
-            "pending": f"{MP_BACK_URL}/pago-pendiente",
+            "success": f"{MP_BACK_URL}/success.html",
+            "failure": f"{MP_BACK_URL}/tienda.html",
+            "pending": f"{MP_BACK_URL}/tienda.html",
         },
         "auto_return": "approved",
         "statement_descriptor": "DIGITALSEG",
