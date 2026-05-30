@@ -632,6 +632,15 @@ PRODUCT_CATALOG: dict[str, int] = {
 
 GATEWAY_PRICE = 59990
 
+# ── Catálogo de cupones de descuento (fuente de verdad del servidor) ──────────
+# Los códigos NO se exponen al cliente; el backend valida y aplica el descuento.
+COUPON_CATALOG: dict[str, dict] = {
+    "LANZAMIENTO": {"type": "percent", "value": 10,    "label": "10% descuento bienvenida"},
+    "PROMO15":     {"type": "percent", "value": 15,    "label": "15% descuento especial"},
+    "CLIENTE10":   {"type": "percent", "value": 10,    "label": "10% descuento fidelidad"},
+    "DS2025":      {"type": "fixed",   "value": 20000, "label": "$20.000 descuento"},
+}
+
 
 # ── MercadoPago config ────────────────────────────────────────────────────────
 
@@ -685,6 +694,33 @@ async def crear_pago(req: PagoRequest, request: Request) -> PagoResponse:
             "currency_id": "CLP",
         })
 
+    # ── Validar cupón y aplicar descuento ────────────────────────────────────
+    discount = 0
+    coupon_label = ""
+    if req.cupon:
+        code = req.cupon.strip().upper()
+        coupon = COUPON_CATALOG.get(code)
+        if coupon is None:
+            raise HTTPException(status_code=400, detail=f"Cupón no válido: {req.cupon}")
+        if coupon["type"] == "percent":
+            discount = round(total * coupon["value"] / 100)
+        else:
+            discount = min(int(coupon["value"]), total - 100)
+        coupon_label = coupon["label"]
+        if discount > 0:
+            ratio = (total - discount) / total
+            adjusted: list[dict] = []
+            running = 0
+            for i, item in enumerate(items):
+                if i < len(items) - 1:
+                    new_price = round(item["unit_price"] * ratio)
+                    running += new_price
+                    adjusted.append({**item, "unit_price": new_price})
+                else:
+                    adjusted.append({**item, "unit_price": max(1, (total - discount) - running)})
+            items = adjusted
+            total = total - discount
+
     ref = req.ref or f"DS-{sku_list[0]}-{int(datetime.utcnow().timestamp())}"
 
     preference_body: dict = {
@@ -699,9 +735,11 @@ async def crear_pago(req: PagoRequest, request: Request) -> PagoResponse:
         "auto_return": "approved",
         "statement_descriptor": "DIGITALSEG",
         "metadata": {
-            "lead_id":  req.lead_id,
-            "cliente":  req.cliente,
-            "telefono": req.telefono,
+            "lead_id":       req.lead_id,
+            "cliente":       req.cliente,
+            "telefono":      req.telefono,
+            "cupon":         req.cupon or "",
+            "descuento_clp": discount,
         },
     }
     if MP_WEBHOOK_URL:
