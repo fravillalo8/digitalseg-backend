@@ -145,11 +145,13 @@ class PagoRequest(BaseModel):
     telefono: str
     producto: str
     sku: Optional[str] = None
-    precio: int
+    precio: Optional[int] = None  # ignorado — el backend calcula desde el catálogo
     cantidad: int = 1
     gateway: bool = False
     lead_id: Optional[int] = None
     ref: Optional[str] = None
+    cupon: Optional[str] = None
+    descuento: Optional[int] = None
 
 
 class PagoResponse(BaseModel):

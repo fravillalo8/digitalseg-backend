@@ -592,6 +592,47 @@ async def book_implementacion(
     )
 
 
+# ── Catálogo de precios oficial (fuente de verdad del servidor) ────────────────
+# El cliente NUNCA define el precio; el backend lo calcula desde aquí.
+PRODUCT_CATALOG: dict[str, int] = {
+    # KAADAS
+    "kaadas-k70-se":         989990,
+    "kaadas-k20-pro":        689990,
+    "kaadas-p30":            620491,
+    "kaadas-q9":             589990,
+    "kaadas-z1":             537990,
+    "kaadas-k9-5w":          489990,
+    "kaadas-k9-c5":          489990,
+    "kaadas-q15":            389990,
+    "kaadas-s500-black":     359990,
+    "kaadas-s500-5w-cooper": 359990,
+    "kaadas-s500-c5-negro":  319990,
+    "kaadas-s500-c5-cobre":  319990,
+    "kaadas-s110":           319990,
+    "kaadas-m7w":            289990,
+    "kaadas-r8-glass":       249990,
+    "kaadas-s10":            237990,
+    "kaadas-r8-rim":         189990,
+    "kaadas-ks02a":          129990,
+    # Lyon Lock
+    "lyon-olimpo":           289990,
+    "lyon-titan-doble":      279990,
+    "lyon-titan":            259990,
+    "lyon-apolo":            259990,
+    "lyon-domus-wifi":       179990,
+    "lyon-domus-tt":         179990,
+    "lyon-pulso":            139990,
+    "lyon-nexo":             129990,
+    "lyon-cerrojo":          119990,
+    # Accesorios / servicios
+    "gateway-g2":             59990,
+    "instalacion-madera":     85000,
+    "instalacion-reja":      105000,
+}
+
+GATEWAY_PRICE = 59990
+
+
 # ── MercadoPago config ────────────────────────────────────────────────────────
 
 MP_ACCESS_TOKEN = os.getenv("MP_ACCESS_TOKEN", "")
@@ -613,25 +654,38 @@ async def crear_pago(req: PagoRequest, request: Request) -> PagoResponse:
             detail="MercadoPago no configurado. Agrega MP_ACCESS_TOKEN al backend.",
         )
 
-    gateway_price = 59990
-    total = int(req.precio) * req.cantidad + (gateway_price if req.gateway else 0)
-    ref   = req.ref or f"DS-{req.sku or 'prod'}-{int(datetime.utcnow().timestamp())}"
+    # ── Validar SKUs y calcular total desde el catálogo oficial ───────────────
+    # El precio enviado por el cliente (req.precio) se ignora completamente.
+    sku_list = [s.strip() for s in (req.sku or "").split(",") if s.strip()]
+    if not sku_list:
+        raise HTTPException(status_code=400, detail="Se requiere al menos un SKU.")
 
-    items: list[dict] = [{
-        "id":         req.sku or "digitalseg-producto",
-        "title":      req.producto,
-        "quantity":   req.cantidad,
-        "unit_price": int(req.precio),
-        "currency_id": "CLP",
-    }]
-    if req.gateway:
+    items: list[dict] = []
+    total = 0
+    for sku_id in sku_list:
+        unit_price = PRODUCT_CATALOG.get(sku_id)
+        if unit_price is None:
+            raise HTTPException(status_code=400, detail=f"Producto no reconocido: {sku_id}")
+        total += unit_price
         items.append({
-            "id":         "digitalseg-gateway-g2",
-            "title":      "Gateway G2 (WiFi Bridge)",
-            "quantity":   1,
-            "unit_price": gateway_price,
+            "id":          sku_id,
+            "title":       req.producto,
+            "quantity":    1,
+            "unit_price":  unit_price,
             "currency_id": "CLP",
         })
+
+    if req.gateway and "gateway-g2" not in sku_list:
+        total += GATEWAY_PRICE
+        items.append({
+            "id":          "digitalseg-gateway-g2",
+            "title":       "Gateway G2 (WiFi Bridge)",
+            "quantity":    1,
+            "unit_price":  GATEWAY_PRICE,
+            "currency_id": "CLP",
+        })
+
+    ref = req.ref or f"DS-{sku_list[0]}-{int(datetime.utcnow().timestamp())}"
 
     preference_body: dict = {
         "items": items,
