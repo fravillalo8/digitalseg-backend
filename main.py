@@ -141,7 +141,6 @@ if _dev_mode:
         "http://127.0.0.1:5500",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-        "null",
     ]
 
 app.add_middleware(
@@ -348,7 +347,7 @@ async def whatsapp_webhook(request: Request) -> dict:
     messages = WhatsAppClient.parse_incoming(body)
 
     for msg in messages:
-        log.info("WA entrante de %s (%s): %s", msg["from"], msg["name"], msg["text"])
+        log.info("WA entrante de +***%s (%s): %s…", msg["from"][-4:], msg["name"][:2] + "***", msg["text"][:40])
         _update_lead_from_whatsapp(msg)
 
     return {"status": "ok"}
@@ -760,9 +759,10 @@ async def crear_pago(req: PagoRequest, request: Request) -> PagoResponse:
             data = r.json()
     except httpx.HTTPStatusError as exc:
         log.error("MP preferences error %s: %s", exc.response.status_code, exc.response.text)
-        raise HTTPException(status_code=502, detail=f"MercadoPago error: {exc.response.text}")
+        raise HTTPException(status_code=502, detail="Error al crear preferencia de pago. Intenta más tarde.")
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc))
+        log.error("MP preferences unexpected error: %s", exc)
+        raise HTTPException(status_code=502, detail="Error interno. Intenta más tarde.")
 
     log.info("MP preference creada: %s | ref=%s | total=%d", data["id"], ref, total)
 
@@ -838,7 +838,7 @@ async def pago_webhook(request: Request) -> dict:
     lead_id_raw  = metadata.get("lead_id")
     ext_ref      = payment.get("external_reference", "")
 
-    log.info("Pago %s: status=%s | cliente=%s | ref=%s", payment_id, status, cliente, ext_ref)
+    log.info("Pago %s: status=%s | cliente=***%s | ref=%s", payment_id, status, cliente[-3:] if cliente else "?", ext_ref)
 
     if status == "approved":
         # Odoo: agregar nota de pago confirmado + intentar marcar como ganado
