@@ -632,13 +632,23 @@ PRODUCT_CATALOG: dict[str, int] = {
 GATEWAY_PRICE = 59990
 
 # ── Catálogo de cupones de descuento (fuente de verdad del servidor) ──────────
-# Los códigos NO se exponen al cliente; el backend valida y aplica el descuento.
-COUPON_CATALOG: dict[str, dict] = {
+# Cargar desde COUPON_CATALOG_JSON (Railway env var) o usar defaults.
+# Formato JSON: {"CODE": {"type": "percent|fixed", "value": N, "label": "..."}}
+_COUPON_DEFAULTS: dict[str, dict] = {
     "LANZAMIENTO": {"type": "percent", "value": 10,    "label": "10% descuento bienvenida"},
     "PROMO15":     {"type": "percent", "value": 15,    "label": "15% descuento especial"},
     "CLIENTE10":   {"type": "percent", "value": 10,    "label": "10% descuento fidelidad"},
     "DS2025":      {"type": "fixed",   "value": 20000, "label": "$20.000 descuento"},
 }
+_coupon_env = os.getenv("COUPON_CATALOG_JSON", "")
+if _coupon_env:
+    try:
+        COUPON_CATALOG: dict[str, dict] = json.loads(_coupon_env)
+    except json.JSONDecodeError:
+        log.warning("COUPON_CATALOG_JSON inválido — usando catálogo por defecto")
+        COUPON_CATALOG = _COUPON_DEFAULTS
+else:
+    COUPON_CATALOG = _COUPON_DEFAULTS
 
 
 # ── MercadoPago config ────────────────────────────────────────────────────────

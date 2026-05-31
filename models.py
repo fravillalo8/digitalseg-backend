@@ -33,6 +33,15 @@ class Customer(BaseModel):
     razonSocial: Optional[str] = None
     rut: Optional[str] = None
 
+    @field_validator("rut", mode="before")
+    @classmethod
+    def validate_rut(cls, v: str | None) -> str | None:
+        if not v:
+            return None
+        if not re.match(r'^\d{1,2}\.?\d{3}\.?\d{3}-[\dKk]$', v.strip()):
+            raise ValueError("RUT inválido")
+        return v.strip().upper()
+
     @field_validator("telefono")
     @classmethod
     def normalize_phone(cls, v: str) -> str:
