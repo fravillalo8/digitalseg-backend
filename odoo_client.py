@@ -170,6 +170,8 @@ class OdooClient:
         quantity: int,
         commitment_date: Optional[str] = None,
         note: str = "",
+        install_price: float = 0,
+        install_label: str = "",
     ) -> int:
         order_vals: dict[str, Any] = {
             "partner_id": partner_id,
@@ -191,7 +193,39 @@ class OdooClient:
             "price_unit": price,
         }])
 
+        # Línea de instalación profesional (obligatoria — parte de la garantía)
+        if install_price and install_price > 0:
+            try:
+                self._exec("sale.order.line", "create", [{
+                    "order_id": order_id,
+                    "product_id": self._install_product_id(),
+                    "name": install_label or "Instalación profesional",
+                    "product_uom_qty": 1,
+                    "price_unit": install_price,
+                }])
+            except Exception:
+                pass
+
         return order_id
+
+    def _install_product_id(self) -> int:
+        """Devuelve (o crea una vez) el producto de servicio 'Instalación profesional'."""
+        cached = getattr(self, "_inst_pid", None)
+        if cached:
+            return cached
+        ids = self._exec("product.product", "search", [[["default_code", "=", "INST-DIGITALSEG"]]])
+        if ids:
+            self._inst_pid = ids[0]
+        else:
+            self._inst_pid = self._exec("product.product", "create", [{
+                "name": "Instalación profesional DigitalSeg",
+                "default_code": "INST-DIGITALSEG",
+                "type": "service",
+                "list_price": 89990,
+                "sale_ok": True,
+                "purchase_ok": False,
+            }])
+        return self._inst_pid
 
     def send_quotation_email(self, order_id: int) -> bool:
         """Envía el presupuesto oficial de Odoo por correo al cliente del pedido."""

@@ -205,6 +205,13 @@ async def create_lead(payload: LeadPayload, request: Request) -> LeadResponse:
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Error creando oportunidad en Odoo: {e}")
 
+    # Instalación elegida por el cliente (obligatoria — parte de la garantía)
+    _INSTALL = {
+        "madera": (89990, "Instalación profesional — puerta de madera"),
+        "reja":   (99990, "Instalación profesional — reja / fierro"),
+    }
+    install_price, install_label = _INSTALL.get((req.instalacion or "").lower(), (0, ""))
+
     # 3. Cotización automática si hay email (con stock check y fecha de entrega)
     sale_order_id = None
     email_sent = False
@@ -224,11 +231,16 @@ async def create_lead(payload: LeadPayload, request: Request) -> LeadResponse:
             "Producto SIN STOCK por ahora — lo conseguimos a pedido. Entrega/instalación estimada en "
             "aproximadamente 1 semana (7 días hábiles). Te confirmamos la fecha exacta al coordinar."
         )
-        _install_line = (
-            "INSTALACIÓN: el valor del producto NO incluye instalación. La instalación profesional es OBLIGATORIA "
-            "(requisito de la garantía de 12 meses): $89.990 en puerta de madera, $99.990 en puerta de fierro/metal. "
-            "DigitalSeg no vende cerraduras sin instalación."
-        )
+        if install_price:
+            _install_line = (
+                f"INSTALACIÓN INCLUIDA: {install_label} (${install_price:,.0f}). ".replace(",", ".")
+                + "La instalación profesional es obligatoria, parte de la garantía de 12 meses."
+            )
+        else:
+            _install_line = (
+                "INSTALACIÓN: la instalación profesional es OBLIGATORIA (parte de la garantía de 12 meses): "
+                "$89.990 en puerta de madera, $99.990 en reja/fierro. DigitalSeg no vende cerraduras sin instalación."
+            )
         stock_note    = _stock_line + "\n\n" + _install_line
         log.info("Stock '%s': %.0f uds | entrega: %d días | commit: %s", rec.sku, stock_qty, delivery_days, commit_dt)
 
@@ -244,6 +256,8 @@ async def create_lead(payload: LeadPayload, request: Request) -> LeadResponse:
                 quantity=quantity,
                 commitment_date=commit_dt,
                 note=stock_note,
+                install_price=install_price,
+                install_label=install_label,
             )
             log.info("Sale order id=%s creada", sale_order_id)
         except Exception as e:
@@ -260,6 +274,8 @@ async def create_lead(payload: LeadPayload, request: Request) -> LeadResponse:
                     in_stock=in_stock,
                     delivery_days=delivery_days,
                     odoo_url=odoo.sale_url(sale_order_id),
+                    install_price=install_price,
+                    install_label=install_label,
                 )
                 _send_email(
                     subject=f"Tu cotización DigitalSeg — {rec.brand} {rec.name}",
@@ -296,6 +312,8 @@ async def create_lead(payload: LeadPayload, request: Request) -> LeadResponse:
                 product_name=f"{rec.brand} {rec.name}",
                 price=rec.price,
                 quantity=quantity,
+                install_price=install_price,
+                install_label=install_label,
             )
         except Exception as e:
             log.error("Error creando cotización: %s", e)
@@ -905,6 +923,8 @@ def _build_cotizacion_html(
     in_stock: bool,
     delivery_days: int,
     odoo_url: str,
+    install_price: float = 0,
+    install_label: str = "",
 ) -> str:
     total = price * quantity
     stock_badge = (
@@ -915,6 +935,26 @@ def _build_cotizacion_html(
     precio_fmt  = f"${price:,.0f}".replace(",", ".")
     total_fmt   = f"${total:,.0f}".replace(",", ".")
     wa_url = "https://wa.me/56946880196?text=Hola%2C+acabo+de+recibir+mi+cotizaci%C3%B3n+y+quiero+avanzar"
+    install_fmt = f"${install_price:,.0f}".replace(",", ".")
+    grand_total_fmt = f"${total + install_price:,.0f}".replace(",", ".")
+    if install_price:
+        install_block = (
+            '<div style="background:#fff8e1;border-left:4px solid #f5a623;border-radius:0 8px 8px 0;padding:16px;margin-bottom:20px">'
+            f'<p style="margin:0 0 8px;font-size:14px;color:#7a5a00;font-weight:700">🔧 {install_label}</p>'
+            '<table style="width:100%;border-collapse:collapse;font-size:13px;color:#7a5a00">'
+            f'<tr><td style="padding:3px 0">Producto</td><td style="padding:3px 0;text-align:right">{total_fmt}</td></tr>'
+            f'<tr><td style="padding:3px 0">Instalación profesional</td><td style="padding:3px 0;text-align:right">{install_fmt}</td></tr>'
+            f'<tr><td style="padding:8px 0 0;font-weight:bold;border-top:1px solid #f0d98a">Total con instalación</td><td style="padding:8px 0 0;text-align:right;font-weight:900;font-size:16px;color:#1b5e20;border-top:1px solid #f0d98a">{grand_total_fmt}</td></tr>'
+            '</table>'
+            '<p style="margin:10px 0 0;font-size:12px;color:#9a7a00">Instalación obligatoria: es parte de tu garantía de 12 meses.</p>'
+            '</div>'
+        )
+    else:
+        install_block = (
+            '<div style="background:#fff8e1;border-left:4px solid #f5a623;border-radius:0 8px 8px 0;padding:16px;margin-bottom:20px">'
+            '<p style="margin:0;font-size:13px;color:#7a5a00;line-height:1.6">🔧 La instalación profesional es <strong>obligatoria</strong> (garantía 12 meses): <strong>$89.990</strong> madera · <strong>$99.990</strong> reja/fierro.</p>'
+            '</div>'
+        )
     return f"""<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body style="margin:0;padding:0;background:#f0f0f0;font-family:Arial,sans-serif">
@@ -961,14 +1001,7 @@ def _build_cotizacion_html(
       </p>
     </div>
 
-    <div style="background:#fff8e1;border-left:4px solid #f5a623;border-radius:0 8px 8px 0;padding:16px;margin-bottom:20px">
-      <p style="margin:0 0 6px;font-size:14px;color:#7a5a00;font-weight:700">🔧 Instalación profesional incluida</p>
-      <p style="margin:0;font-size:13px;color:#7a5a00;line-height:1.6">
-        En DigitalSeg <strong>no instalamos sin garantía ni vendemos sin instalación</strong>: la instalación profesional es requisito de tu <strong>garantía de 12 meses</strong>.
-        Valor instalación: <strong>$89.990</strong> en puerta de madera · <strong>$99.990</strong> en puerta de fierro/metal.
-        El precio de arriba es solo del producto; te confirmamos el total con instalación al coordinar la visita.
-      </p>
-    </div>
+    {install_block}
     <p style="font-size:13px;color:#777;margin:0 0 20px;line-height:1.6">
       Cotización referencial. <a href="{odoo_url}" style="color:#4A90E2">Ver cotización en sistema →</a>
     </p>

@@ -11,6 +11,7 @@ class Requirements(BaseModel):
     features: list[str] = []
     budgetMin: Optional[int] = None
     budgetMax: Optional[int] = None
+    instalacion: Optional[str] = None   # 'madera' | 'reja'
 
 
 class Recommendation(BaseModel):
