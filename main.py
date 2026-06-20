@@ -218,13 +218,18 @@ async def create_lead(payload: LeadPayload, request: Request) -> LeadResponse:
         in_stock      = stock_qty >= 1
         delivery_days = 2 if in_stock else 7   # sin stock: ~1 semana
         commit_dt     = (datetime.utcnow() + timedelta(days=delivery_days)).strftime("%Y-%m-%d 12:00:00")
-        stock_note    = (
+        _stock_line   = (
             f"Stock disponible: {stock_qty:.0f} unidades — entrega/instalación estimada: {delivery_days} días hábiles."
             if in_stock else
-            "OBSERVACIÓN: producto SIN STOCK por ahora — lo conseguimos a pedido. "
-            "Entrega/instalación estimada en aproximadamente 1 semana (7 días hábiles). "
-            "Te confirmamos la fecha exacta al coordinar."
+            "Producto SIN STOCK por ahora — lo conseguimos a pedido. Entrega/instalación estimada en "
+            "aproximadamente 1 semana (7 días hábiles). Te confirmamos la fecha exacta al coordinar."
         )
+        _install_line = (
+            "INSTALACIÓN: el valor del producto NO incluye instalación. La instalación profesional es OBLIGATORIA "
+            "(requisito de la garantía de 12 meses): $89.990 en puerta de madera, $99.990 en puerta de fierro/metal. "
+            "DigitalSeg no vende cerraduras sin instalación."
+        )
+        stock_note    = _stock_line + "\n\n" + _install_line
         log.info("Stock '%s': %.0f uds | entrega: %d días | commit: %s", rec.sku, stock_qty, delivery_days, commit_dt)
 
         product_id = odoo.find_product(rec.sku)
@@ -909,7 +914,7 @@ def _build_cotizacion_html(
     )
     precio_fmt  = f"${price:,.0f}".replace(",", ".")
     total_fmt   = f"${total:,.0f}".replace(",", ".")
-    wa_url = "https://wa.me/56978522980?text=Hola%2C+acabo+de+recibir+mi+cotizaci%C3%B3n+y+quiero+avanzar"
+    wa_url = "https://wa.me/56946880196?text=Hola%2C+acabo+de+recibir+mi+cotizaci%C3%B3n+y+quiero+avanzar"
     return f"""<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body style="margin:0;padding:0;background:#f0f0f0;font-family:Arial,sans-serif">
@@ -956,9 +961,16 @@ def _build_cotizacion_html(
       </p>
     </div>
 
+    <div style="background:#fff8e1;border-left:4px solid #f5a623;border-radius:0 8px 8px 0;padding:16px;margin-bottom:20px">
+      <p style="margin:0 0 6px;font-size:14px;color:#7a5a00;font-weight:700">🔧 Instalación profesional incluida</p>
+      <p style="margin:0;font-size:13px;color:#7a5a00;line-height:1.6">
+        En DigitalSeg <strong>no instalamos sin garantía ni vendemos sin instalación</strong>: la instalación profesional es requisito de tu <strong>garantía de 12 meses</strong>.
+        Valor instalación: <strong>$89.990</strong> en puerta de madera · <strong>$99.990</strong> en puerta de fierro/metal.
+        El precio de arriba es solo del producto; te confirmamos el total con instalación al coordinar la visita.
+      </p>
+    </div>
     <p style="font-size:13px;color:#777;margin:0 0 20px;line-height:1.6">
-      Esta cotización es referencial. Los precios finales pueden variar según instalación y accesorios requeridos.
-      <a href="{odoo_url}" style="color:#4A90E2">Ver cotización en sistema →</a>
+      Cotización referencial. <a href="{odoo_url}" style="color:#4A90E2">Ver cotización en sistema →</a>
     </p>
 
     <div style="text-align:center;margin:28px 0 8px">
@@ -968,8 +980,15 @@ def _build_cotizacion_html(
       </a>
     </div>
     <p style="text-align:center;font-size:12px;color:#aaa;margin:10px 0 0">
-      También puedes llamarnos al +56 9 7852 2980
+      También puedes escribirnos al +56 9 4688 0196
     </p>
+
+    <div style="margin-top:28px;padding-top:20px;border-top:1px solid #eee">
+      <p style="margin:0;font-size:15px;color:#0a0a0a;font-weight:800">Sebastián Cabrera</p>
+      <p style="margin:3px 0 0;font-size:13px;color:#777">Gerente de Operaciones · DigitalSeg</p>
+      <p style="margin:3px 0 0;font-size:13px;color:#777">📱 +56 9 4688 0196 &nbsp;·&nbsp; ✉️ sebastian.cabrera@digitalseg.cl</p>
+      <p style="margin:3px 0 0;font-size:13px;color:#777">📍 Valle del Aconcagua · digitalseg.cl</p>
+    </div>
   </div>
 
   <div style="background:#f5f5f5;padding:16px 32px;text-align:center;font-size:11px;color:#aaa">
