@@ -67,13 +67,24 @@ class OdooClient:
         city: Optional[str] = None,
         company_name: Optional[str] = None,
         vat: Optional[str] = None,
+        email: Optional[str] = None,
     ) -> int:
         ids = self._exec(
             "res.partner", "search",
             [[["phone", "=", phone]]],
         )
         if ids:
-            return ids[0]
+            partner_id = ids[0]
+            # Si el contacto existe pero no tiene email, lo completamos
+            # (necesario para que Odoo pueda enviarle la cotización).
+            if email:
+                try:
+                    data = self._exec("res.partner", "read", [[partner_id]], {"fields": ["email"]})
+                    if data and not data[0].get("email"):
+                        self._exec("res.partner", "write", [[partner_id], {"email": email}])
+                except Exception:
+                    pass
+            return partner_id
 
         vals: dict[str, Any] = {
             "name": name,
@@ -86,6 +97,8 @@ class OdooClient:
             vals["company_name"] = company_name
         if vat:
             vals["vat"] = vat
+        if email:
+            vals["email"] = email
 
         return self._exec("res.partner", "create", [vals])
 
@@ -181,17 +194,38 @@ class OdooClient:
         return order_id
 
     def send_quotation_email(self, order_id: int) -> bool:
-        template_ids = self._exec(
-            "mail.template", "search",
-            [[["model", "=", "sale.order"], ["name", "ilike", "quotation"]]]
-        )
-        if not template_ids:
+        """Envía el presupuesto oficial de Odoo por correo al cliente del pedido."""
+        template_id = None
+        # 1) Plantilla estándar de presupuesto por external id (robusto al idioma).
+        try:
+            data = self._exec(
+                "ir.model.data", "search_read",
+                [[["module", "=", "sale"], ["name", "=", "email_template_edi_sale"]]],
+                {"fields": ["res_id"], "limit": 1},
+            )
+            if data:
+                template_id = data[0]["res_id"]
+        except Exception:
+            template_id = None
+        # 2) Fallback: cualquier plantilla de correo de sale.order.
+        if not template_id:
+            ids = self._exec(
+                "mail.template", "search",
+                [[["model", "=", "sale.order"]]], {"limit": 1},
+            )
+            if ids:
+                template_id = ids[0]
+        if not template_id:
             return False
         self._exec(
             "mail.template", "send_mail",
-            [[template_ids[0]], order_id],
-            {"force_send": True}
+            [[template_id], order_id], {"force_send": True},
         )
+        # Marcar la cotización como "enviada" en Odoo (si sigue en borrador).
+        try:
+            self._exec("sale.order", "write", [[order_id], {"state": "sent"}])
+        except Exception:
+            pass
         return True
 
     # ── Calendar events ──────────────────────────────────────────────────────────

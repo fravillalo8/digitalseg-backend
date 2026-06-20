@@ -183,6 +183,7 @@ async def create_lead(payload: LeadPayload, request: Request) -> LeadResponse:
             city=c.ciudad,
             company_name=c.razonSocial,
             vat=c.rut,
+            email=c.email,
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Error creando contacto en Odoo: {e}")
@@ -215,12 +216,14 @@ async def create_lead(payload: LeadPayload, request: Request) -> LeadResponse:
             log.warning("No se pudo verificar stock de '%s': %s", rec.sku, e)
 
         in_stock      = stock_qty >= 1
-        delivery_days = 2 if in_stock else 5
+        delivery_days = 2 if in_stock else 7   # sin stock: ~1 semana
         commit_dt     = (datetime.utcnow() + timedelta(days=delivery_days)).strftime("%Y-%m-%d 12:00:00")
         stock_note    = (
             f"Stock disponible: {stock_qty:.0f} unidades — entrega/instalación estimada: {delivery_days} días hábiles."
             if in_stock else
-            f"Producto sin stock — entrega/instalación estimada: {delivery_days} días hábiles."
+            "OBSERVACIÓN: producto SIN STOCK por ahora — lo conseguimos a pedido. "
+            "Entrega/instalación estimada en aproximadamente 1 semana (7 días hábiles). "
+            "Te confirmamos la fecha exacta al coordinar."
         )
         log.info("Stock '%s': %.0f uds | entrega: %d días | commit: %s", rec.sku, stock_qty, delivery_days, commit_dt)
 
@@ -267,6 +270,15 @@ async def create_lead(payload: LeadPayload, request: Request) -> LeadResponse:
                 log.info("Email cotización enviado al cliente %s y al equipo", c.email)
             except Exception as e:
                 log.error("Error enviando email de cotización: %s", e)
+
+            # Enviar la cotización OFICIAL de Odoo (presupuesto formal) al cliente
+            try:
+                if odoo.send_quotation_email(sale_order_id):
+                    log.info("Cotización oficial de Odoo enviada al cliente %s", c.email)
+                else:
+                    log.warning("No se encontró plantilla de presupuesto en Odoo — presupuesto oficial no enviado")
+            except Exception as e:
+                log.error("Error enviando cotización oficial de Odoo: %s", e)
 
     elif c.cotizacionFormal:
         product_id = odoo.find_product(rec.sku)
