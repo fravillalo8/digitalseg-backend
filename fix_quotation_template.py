@@ -86,9 +86,17 @@ if data:
 if not tid and templates:
     tid = templates[0]["id"]
 
+NEW_SUBJECT = "Tu cotización {{ object.name }} — DigitalSeg"
 if tid:
-    ex("mail.template", "write", [[tid], {"body_html": NEW_BODY}])
-    print(f"  ✅ Plantilla [{tid}] → saludo por nombre + firma de Sebastián Cabrera")
+    # El cuerpo y el asunto son traducibles: hay que escribirlos en cada idioma
+    # (el correo al cliente se renderiza en es_CL).
+    for lang in (None, "es_CL", "es_419", "en_US"):
+        ctx = {"lang": lang} if lang else {}
+        try:
+            ex("mail.template", "write", [[tid], {"body_html": NEW_BODY, "subject": NEW_SUBJECT}], {"context": ctx})
+            print(f"  ✅ Plantilla [{tid}] actualizada (lang={lang or 'default'})")
+        except Exception as e:
+            print(f"  ⚠️ lang={lang}: {e}")
 else:
     print("  ⚠️ No se encontró la plantilla de presupuesto")
 
@@ -100,8 +108,12 @@ seqs = ex(
     {"fields": ["id", "name", "number_next_actual", "prefix", "padding"]},
 )
 for s in seqs:
-    ex("ir.sequence", "write", [[s["id"]], {"number_next": 168}])
-    print(f"  ✅ Secuencia [{s['id']}] {s['name']} → próximo número 168 (S00168)")
+    cur = s.get("number_next_actual", 0)
+    if cur < 168:
+        ex("ir.sequence", "write", [[s["id"]], {"number_next": 168}])
+        print(f"  ✅ Secuencia [{s['id']}] {s['name']} → próximo número 168 (S00168)")
+    else:
+        print(f"  ⏭ Secuencia [{s['id']}] ya está en {cur} (no se baja para no duplicar)")
 if not seqs:
     print("  ⚠️ No se encontró la secuencia de sale.order")
 
