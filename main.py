@@ -3,6 +3,8 @@ import os
 import json
 import asyncio
 import logging
+import hmac
+import hashlib
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -44,6 +46,37 @@ def _check_rate(request: Request) -> None:
     if len(_rate_store[ip]) >= _RATE_MAX:
         raise HTTPException(status_code=429, detail="Demasiadas solicitudes. Espera unos minutos.")
     _rate_store[ip].append(now)
+
+
+# ── Auth admin (fail-closed) ──────────────────────────────────────────────────
+def _require_admin(x_admin_key: Optional[str]) -> None:
+    """Exige X-Admin-Key. Falla CERRADO: si AGENDA_ADMIN_KEY no está configurada
+    o la clave no coincide, deniega. Nunca pasa sin autenticación."""
+    admin_key = os.getenv("AGENDA_ADMIN_KEY", "")
+    if not admin_key or not x_admin_key or not hmac.compare_digest(x_admin_key, admin_key):
+        raise HTTPException(status_code=401, detail="No autorizado")
+
+
+# ── Verificación de firma de webhook MercadoPago ──────────────────────────────
+_processed_payments: set[str] = set()
+
+def _verify_mp_signature(request: Request, data_id: str) -> bool:
+    """Valida el header x-signature (ts + v1 HMAC-SHA256) de MercadoPago.
+    Falla CERRADO: sin MP_WEBHOOK_SECRET o firma inválida → False."""
+    secret = os.getenv("MP_WEBHOOK_SECRET", "")
+    if not secret:
+        return False
+    parts = dict(
+        p.split("=", 1) for p in request.headers.get("x-signature", "").split(",") if "=" in p
+    )
+    ts = parts.get("ts", "").strip()
+    v1 = parts.get("v1", "").strip()
+    if not ts or not v1:
+        return False
+    req_id   = request.headers.get("x-request-id", "")
+    manifest = f"id:{data_id};request-id:{req_id};ts:{ts};"
+    expected = hmac.new(secret.encode(), manifest.encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, v1)
 
 odoo: OdooClient
 wa: WhatsAppClient
@@ -460,9 +493,7 @@ async def send_template(req: SendTemplateRequest) -> dict:
 
 @app.get("/api/agenda", response_model=list[AgendaEvent])
 async def get_agenda(x_admin_key: Optional[str] = Header(default=None)) -> list[AgendaEvent]:
-    admin_key = os.getenv("AGENDA_ADMIN_KEY", "")
-    if admin_key and x_admin_key != admin_key:
-        raise HTTPException(status_code=401, detail="X-Admin-Key inválido")
+    _require_admin(x_admin_key)
     return _agenda_events
 
 
@@ -545,9 +576,7 @@ async def book_implementacion(
     req: ImplementacionRequest,
     x_admin_key: Optional[str] = Header(default=None),
 ) -> AgendaBookingResponse:
-    admin_key = os.getenv("AGENDA_ADMIN_KEY", "")
-    if admin_key and x_admin_key != admin_key:
-        raise HTTPException(status_code=401, detail="X-Admin-Key inválido")
+    _require_admin(x_admin_key)
 
     global _agenda_next_id
 
@@ -863,6 +892,11 @@ async def pago_webhook(request: Request) -> dict:
     if not payment_id or not MP_ACCESS_TOKEN:
         return {"ok": True}
 
+    # Verificar firma del webhook (fail-closed: sin MP_WEBHOOK_SECRET se rechaza)
+    if not _verify_mp_signature(request, payment_id):
+        log.warning("MP webhook rechazado: firma inválida o MP_WEBHOOK_SECRET ausente")
+        raise HTTPException(status_code=401, detail="Firma inválida")
+
     try:
         async with httpx.AsyncClient() as client:
             r = await client.get(
@@ -886,6 +920,12 @@ async def pago_webhook(request: Request) -> dict:
     log.info("Pago %s: status=%s | cliente=***%s | ref=%s", payment_id, status, cliente[-3:] if cliente else "?", ext_ref)
 
     if status == "approved":
+        # Anti-replay: no repetir efectos secundarios de un pago ya procesado
+        if payment_id in _processed_payments:
+            return {"ok": True, "payment_id": payment_id, "status": status, "dedup": True}
+        _processed_payments.add(payment_id)
+        if len(_processed_payments) > 5000:
+            _processed_payments.clear()
         # Odoo: agregar nota de pago confirmado + intentar marcar como ganado
         if lead_id_raw:
             try:

@@ -23,8 +23,8 @@ class WhatsAppClient:
     def verify_signature(self, payload_bytes: bytes, signature_header: str) -> bool:
         """Valida X-Hub-Signature-256: sha256=<hex>"""
         if not self.app_secret:
-            log.warning("META_APP_SECRET no configurado — saltando validación de firma")
-            return True
+            log.error("META_APP_SECRET no configurado — webhook RECHAZADO (fail-closed)")
+            return False
         expected = hmac.new(
             self.app_secret.encode(), payload_bytes, hashlib.sha256
         ).hexdigest()
@@ -79,9 +79,10 @@ class WhatsAppClient:
         precio: float,
         odoo_url: str = "",
     ) -> dict:
-        """Notifica a SALES_NOTIFY_PHONE (Sebastián) cuando llega un lead nuevo del cotizador."""
-        sales = os.getenv("SALES_NOTIFY_PHONE", "")
-        if not sales:
+        """Notifica a todos los números en SALES_NOTIFY_PHONE (separados por coma)."""
+        raw = os.getenv("SALES_NOTIFY_PHONE", "")
+        numeros = [n.strip() for n in raw.split(",") if n.strip()]
+        if not numeros:
             log.warning("SALES_NOTIFY_PHONE no configurado — notificación de ventas omitida")
             return {"skipped": True, "reason": "SALES_NOTIFY_PHONE no definido"}
         msg = (
@@ -93,7 +94,14 @@ class WhatsAppClient:
             f"*Precio:* ${precio:,.0f}".replace(",", ".") + "\n"
             + (f"\n🔗 {odoo_url}" if odoo_url else "")
         )
-        return self.send_text(to=sales, text=msg)
+        results = {}
+        for numero in numeros:
+            try:
+                results[numero] = self.send_text(to=numero, text=msg)
+            except Exception as e:
+                log.warning("Notificación no enviada a %s: %s", numero, e)
+                results[numero] = {"error": str(e)}
+        return results
 
     # ── Envío de plantillas ──────────────────────────────────────────────────────
 
