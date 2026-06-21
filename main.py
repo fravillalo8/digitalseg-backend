@@ -6,6 +6,7 @@ import logging
 import hmac
 import hashlib
 import smtplib
+from html import escape
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from contextlib import asynccontextmanager
@@ -179,7 +180,7 @@ if _dev_mode:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
-    allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?" if _dev_mode else r"^$",
+    allow_origin_regex=(r"http://(localhost|127\.0\.0\.1)(:\d+)?" if _dev_mode else None),
     allow_methods=["POST", "GET", "OPTIONS"],
     allow_headers=["Content-Type", "X-Admin-Key"],
     allow_credentials=False,
@@ -396,7 +397,8 @@ async def whatsapp_verify(request: Request) -> Response:
     params       = dict(request.query_params)
     verify_token = os.getenv("META_VERIFY_TOKEN", "")
     if (
-        params.get("hub.mode") == "subscribe"
+        verify_token
+        and params.get("hub.mode") == "subscribe"
         and params.get("hub.verify_token") == verify_token
     ):
         return Response(content=params["hub.challenge"], media_type="text/plain")
@@ -449,8 +451,8 @@ def _update_lead_from_whatsapp(msg: dict) -> None:
             return
 
         note = (
-            f"<p><b>Mensaje WhatsApp</b> de {msg['name']} ({phone})</p>"
-            f"<p>{msg['text']}</p>"
+            f"<p><b>Mensaje WhatsApp</b> de {escape(str(msg['name']))} ({escape(phone)})</p>"
+            f"<p>{escape(str(msg['text']))}</p>"
         )
         odoo._exec("crm.lead", "write", [[ids[0]], {"description": note}])
         log.info("Lead id=%s actualizado con mensaje WA", ids[0])
@@ -741,7 +743,7 @@ async def crear_pago(req: PagoRequest, request: Request) -> PagoResponse:
 
     # ── Validar SKUs y calcular total desde el catálogo oficial ───────────────
     # El precio enviado por el cliente (req.precio) se ignora completamente.
-    sku_list = [s.strip() for s in (req.sku or "").split(",") if s.strip()]
+    sku_list = [s.strip() for s in (req.sku or "").split(",") if s.strip()][:20]
     if not sku_list:
         raise HTTPException(status_code=400, detail="Se requiere al menos un SKU.")
 
@@ -969,6 +971,9 @@ def _build_cotizacion_html(
     install_price: float = 0,
     install_label: str = "",
 ) -> str:
+    nombre   = escape(str(nombre))
+    producto = escape(str(producto))
+    sku      = escape(str(sku))
     total = price * quantity
     stock_badge = (
         "<span style='background:#27ae60;color:#fff;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:bold'>✓ En stock</span>"
@@ -1105,11 +1110,11 @@ async def informe_seguridad(req: InformeSeguridad, request: Request) -> dict:
 
     nivel_color = {"Bajo": "#e74c3c", "Medio": "#f39c12", "Alto": "#27ae60"}.get(req.nivel, "#555")
 
-    findings_html = "".join(f"<li>{f}</li>" for f in req.findings) if req.findings else "<li>Sin hallazgos críticos</li>"
-    recs_html     = "".join(f"<li>{r}</li>" for r in req.recs)     if req.recs     else "<li>Mantener el nivel actual</li>"
+    findings_html = "".join(f"<li>{escape(str(f))}</li>" for f in req.findings) if req.findings else "<li>Sin hallazgos críticos</li>"
+    recs_html     = "".join(f"<li>{escape(str(r))}</li>" for r in req.recs)     if req.recs     else "<li>Mantener el nivel actual</li>"
     respuestas_html = "".join(
-        f"<tr><td style='padding:6px 12px;border-bottom:1px solid #eee'>{k}</td>"
-        f"<td style='padding:6px 12px;border-bottom:1px solid #eee'><b>{v}</b></td></tr>"
+        f"<tr><td style='padding:6px 12px;border-bottom:1px solid #eee'>{escape(str(k))}</td>"
+        f"<td style='padding:6px 12px;border-bottom:1px solid #eee'><b>{escape(str(v))}</b></td></tr>"
         for k, v in req.respuestas.items()
     )
 
@@ -1122,11 +1127,11 @@ async def informe_seguridad(req: InformeSeguridad, request: Request) -> dict:
     <p style="color:#aaa;margin:6px 0 0;font-size:14px">Calculadora de Seguridad Inteligente</p>
   </div>
   <div style="padding:28px 32px">
-    <h2 style="margin:0 0 4px;font-size:18px">Hola, {req.nombre}</h2>
+    <h2 style="margin:0 0 4px;font-size:18px">Hola, {escape(req.nombre)}</h2>
     <p style="color:#555;margin:0 0 20px;font-size:14px">
-      Tel: {req.telefono}{f" | Email: {req.email}" if req.email else ""}
-      {f" | Zona: {req.zona}" if req.zona else ""}
-      {f" | Propiedad: {req.tipo_propiedad}" if req.tipo_propiedad else ""}
+      Tel: {escape(req.telefono)}{f" | Email: {escape(req.email)}" if req.email else ""}
+      {f" | Zona: {escape(req.zona)}" if req.zona else ""}
+      {f" | Propiedad: {escape(req.tipo_propiedad)}" if req.tipo_propiedad else ""}
     </p>
 
     <div style="text-align:center;margin:20px 0">

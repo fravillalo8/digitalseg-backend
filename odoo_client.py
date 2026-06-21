@@ -4,6 +4,7 @@ import xmlrpc.client
 import httpx
 from functools import cached_property
 from typing import Any, Optional
+from html import escape
 
 
 class OdooClient:
@@ -133,16 +134,16 @@ class OdooClient:
         needs_gateway: bool = False,
         email: Optional[str] = None,
     ) -> int:
-        features = ", ".join(requirements.get("features", []))
+        features = escape(", ".join(str(f) for f in requirements.get("features", [])))
         desc = (
-            f"<p><b>Producto:</b> {product_name} (SKU: {sku}) — ${price:,.0f}</p>"
-            f"<p><b>Espacio:</b> {requirements.get('space', '')} | "
-            f"<b>Puerta:</b> {requirements.get('doorType', '')} | "
-            f"<b>Grosor:</b> {requirements.get('thickness', '')} mm</p>"
+            f"<p><b>Producto:</b> {escape(str(product_name))} (SKU: {escape(str(sku))}) — ${price:,.0f}</p>"
+            f"<p><b>Espacio:</b> {escape(str(requirements.get('space', '')))} | "
+            f"<b>Puerta:</b> {escape(str(requirements.get('doorType', '')))} | "
+            f"<b>Grosor:</b> {escape(str(requirements.get('thickness', '')))} mm</p>"
             f"<p><b>Funciones:</b> {features}</p>"
             f"<p><b>Gateway adicional:</b> {'Sí' if needs_gateway else 'No'}</p>"
             f"<p><b>Cantidad:</b> {quantity}</p>"
-            f"<p><b>Origen:</b> {source_label}</p>"
+            f"<p><b>Origen:</b> {escape(str(source_label))}</p>"
         )
 
         vals: dict[str, Any] = {

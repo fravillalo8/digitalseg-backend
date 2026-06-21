@@ -1,38 +1,38 @@
 from __future__ import annotations
 from typing import Optional
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, Field
 import re
 
 
 class Requirements(BaseModel):
-    space: str
-    doorType: str
+    space: str = Field(max_length=80)
+    doorType: str = Field(max_length=80)
     thickness: Optional[int] = None
-    features: list[str] = []
+    features: list[str] = Field(default=[], max_length=20)
     budgetMin: Optional[int] = None
     budgetMax: Optional[int] = None
-    instalacion: Optional[str] = None   # 'madera' | 'reja'
+    instalacion: Optional[str] = Field(default=None, max_length=20)   # 'madera' | 'reja'
 
 
 class Recommendation(BaseModel):
-    id: str
-    brand: str
-    name: str
-    sku: str
+    id: str = Field(max_length=120)
+    brand: str = Field(max_length=120)
+    name: str = Field(max_length=200)
+    sku: str = Field(max_length=200)
     price: float
     needsGateway: bool = False
     total: float
 
 
 class Customer(BaseModel):
-    nombre: str
-    ciudad: Optional[str] = None
-    telefono: str
-    email: Optional[str] = None
-    cantidad: str = "1"
+    nombre: str = Field(max_length=120)
+    ciudad: Optional[str] = Field(default=None, max_length=80)
+    telefono: str = Field(max_length=30)
+    email: Optional[str] = Field(default=None, max_length=120)
+    cantidad: str = Field(default="1", max_length=10)
     cotizacionFormal: bool = False
-    razonSocial: Optional[str] = None
-    rut: Optional[str] = None
+    razonSocial: Optional[str] = Field(default=None, max_length=150)
+    rut: Optional[str] = Field(default=None, max_length=20)
 
     @field_validator("rut", mode="before")
     @classmethod
@@ -84,11 +84,11 @@ class SendTemplateRequest(BaseModel):
 # ── Agenda ────────────────────────────────────────────────────────────────────
 
 class VisitaRequest(BaseModel):
-    nombre: str
-    telefono: str
-    direccion: Optional[str] = None
-    proyecto: str = "Hogar"
-    fecha: str   # "2026-05-12"
+    nombre: str = Field(max_length=120)
+    telefono: str = Field(max_length=30)
+    direccion: Optional[str] = Field(default=None, max_length=200)
+    proyecto: str = Field(default="Hogar", max_length=80)
+    fecha: str = Field(max_length=10)   # "2026-05-12"
     hora: int    # 10
 
     @field_validator("telefono")
@@ -151,16 +151,16 @@ class AgendaBookingResponse(BaseModel):
 # ── Pago MercadoPago ──────────────────────────────────────────────────────────
 
 class PagoRequest(BaseModel):
-    cliente: str
-    telefono: str
-    producto: str
-    sku: Optional[str] = None
+    cliente: str = Field(max_length=120)
+    telefono: str = Field(max_length=30)
+    producto: str = Field(max_length=200)
+    sku: Optional[str] = Field(default=None, max_length=500)
     precio: Optional[int] = None  # ignorado — el backend calcula desde el catálogo
     cantidad: int = 1
     gateway: bool = False
     lead_id: Optional[int] = None
-    ref: Optional[str] = None
-    cupon: Optional[str] = None
+    ref: Optional[str] = Field(default=None, max_length=80)
+    cupon: Optional[str] = Field(default=None, max_length=40)
     descuento: Optional[int] = None
 
 
@@ -176,13 +176,13 @@ class PagoResponse(BaseModel):
 # ── Informe de Seguridad ──────────────────────────────────────────────────────
 
 class InformeSeguridad(BaseModel):
-    nombre: str
-    telefono: str
-    email: Optional[str] = None
+    nombre: str = Field(max_length=120)
+    telefono: str = Field(max_length=30)
+    email: Optional[str] = Field(default=None, max_length=120)
     score: int
-    nivel: str
-    zona: Optional[str] = None
-    tipo_propiedad: Optional[str] = None
+    nivel: str = Field(max_length=30)
+    zona: Optional[str] = Field(default=None, max_length=80)
+    tipo_propiedad: Optional[str] = Field(default=None, max_length=80)
     respuestas: dict = {}
-    findings: list[str] = []
-    recs: list[str] = []
+    findings: list[str] = Field(default=[], max_length=50)
+    recs: list[str] = Field(default=[], max_length=50)
