@@ -219,7 +219,8 @@ async def create_lead(payload: LeadPayload, request: Request) -> LeadResponse:
             email=c.email,
         )
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Error creando contacto en Odoo: {e}")
+        log.error("Error creando contacto en Odoo: %s", e)
+        raise HTTPException(status_code=502, detail="No pudimos registrar tu contacto. Intenta más tarde.")
 
     # 2. Oportunidad CRM
     try:
@@ -236,7 +237,8 @@ async def create_lead(payload: LeadPayload, request: Request) -> LeadResponse:
             email=c.email,
         )
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Error creando oportunidad en Odoo: {e}")
+        log.error("Error creando oportunidad en Odoo: %s", e)
+        raise HTTPException(status_code=502, detail="No pudimos registrar tu solicitud. Intenta más tarde.")
 
     # Instalación elegida por el cliente (obligatoria — parte de la garantía)
     _INSTALL = {
@@ -486,7 +488,8 @@ async def send_template(req: SendTemplateRequest) -> dict:
             result = wa.send_template(to=req.to, template_name=req.template)
         return {"ok": True, "result": result}
     except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        log.error("Error en send-template: %s", e)
+        raise HTTPException(status_code=502, detail="Error al enviar la plantilla.")
 
 
 # ── GET /api/agenda — lista todos los eventos ────────────────────────────────
@@ -908,7 +911,7 @@ async def pago_webhook(request: Request) -> dict:
             payment = r.json()
     except Exception as exc:
         log.error("Error consultando pago %s: %s", payment_id, exc)
-        raise HTTPException(status_code=502, detail=str(exc))
+        raise HTTPException(status_code=502, detail="Error procesando el pago.")
 
     status       = payment.get("status", "")
     metadata     = payment.get("metadata", {})

@@ -1,0 +1,10 @@
+.env
+.env.*
+.git
+.gitignore
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+fix_quotation_template.py
+test_odoo.py
