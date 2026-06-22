@@ -94,8 +94,10 @@ class OdooClient:
         }
         if city:
             vals["city"] = city
+        # 'company_name' NO es un campo válido en res.partner (Odoo 19): lo omitimos
+        # a propósito. La razón social viaja en el lead/WhatsApp para el equipo.
         if company_name:
-            vals["company_name"] = company_name
+            vals["comment"] = f"Razón social: {company_name}"
         if vat:
             vals["vat"] = vat
         if email:
@@ -104,12 +106,12 @@ class OdooClient:
         try:
             return self._exec("res.partner", "create", [vals])
         except Exception:
-            # Odoo Chile valida el dígito verificador del RUT (vat). Si es inválido,
-            # NO perdemos el lead: reintentamos creando el contacto sin el RUT.
-            if "vat" in vals:
-                vals.pop("vat", None)
-                return self._exec("res.partner", "create", [vals])
-            raise
+            # Defensa: si algún campo opcional es rechazado por esta versión de Odoo,
+            # reintentamos con lo mínimo para NO perder NUNCA el lead.
+            minimal: dict[str, Any] = {"name": name, "phone": phone, "customer_rank": 1}
+            if email:
+                minimal["email"] = email
+            return self._exec("res.partner", "create", [minimal])
 
     # ── Products ────────────────────────────────────────────────────────────────
 
