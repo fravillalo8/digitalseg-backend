@@ -101,7 +101,15 @@ class OdooClient:
         if email:
             vals["email"] = email
 
-        return self._exec("res.partner", "create", [vals])
+        try:
+            return self._exec("res.partner", "create", [vals])
+        except Exception:
+            # Odoo Chile valida el dígito verificador del RUT (vat). Si es inválido,
+            # NO perdemos el lead: reintentamos creando el contacto sin el RUT.
+            if "vat" in vals:
+                vals.pop("vat", None)
+                return self._exec("res.partner", "create", [vals])
+            raise
 
     # ── Products ────────────────────────────────────────────────────────────────
 
