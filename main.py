@@ -40,8 +40,18 @@ _RATE_WINDOW = timedelta(minutes=10)
 _RATE_MAX    = 10
 
 
+def _client_ip(request: Request) -> str:
+    """IP real del cliente. Detrás del proxy de Railway, request.client.host es
+    la IP del proxy (bucket global → auto-DoS); usamos el primer hop de
+    X-Forwarded-For para que el rate-limit sea por cliente."""
+    xff = request.headers.get("x-forwarded-for", "")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
 def _check_rate(request: Request) -> None:
-    ip  = request.client.host if request.client else "unknown"
+    ip  = _client_ip(request)
     now = datetime.utcnow()
     _rate_store[ip] = [t for t in _rate_store[ip] if now - t < _RATE_WINDOW]
     if len(_rate_store[ip]) >= _RATE_MAX:
@@ -463,7 +473,19 @@ def _update_lead_from_whatsapp(msg: dict) -> None:
 # ── POST /api/whatsapp/send-template ────────────────────────────────────────────
 
 @app.post("/api/whatsapp/send-template")
-async def send_template(req: SendTemplateRequest) -> dict:
+async def send_template(
+    req: SendTemplateRequest,
+    request: Request,
+    x_admin_key: Optional[str] = Header(default=None),
+) -> dict:
+    # Endpoint operativo (NO público): exige X-Admin-Key + rate-limit para
+    # que nadie pueda enviar plantillas de WhatsApp a números arbitrarios
+    # desde el WABA de la empresa (spam / costo / baneo).
+    _check_rate(request)
+    _require_admin(x_admin_key)
+    to_clean = (req.to or "").lstrip("+")
+    if not to_clean.isdigit() or not (8 <= len(to_clean) <= 15):
+        raise HTTPException(status_code=422, detail="Número inválido")
     try:
         if req.template == "solicitud_cotizacion_recibida":
             result = wa.solicitud_recibida(
@@ -863,7 +885,7 @@ async def crear_pago(req: PagoRequest, request: Request) -> PagoResponse:
         try:
             nota = (
                 f"<p><b>💳 Pago iniciado</b></p>"
-                f"<p>Ref: {ref} | Total: ${total:,} CLP | MP preference: {data['id']}</p>"
+                f"<p>Ref: {escape(str(ref))} | Total: ${total:,} CLP | MP preference: {escape(str(data['id']))}</p>"
             )
             odoo._exec("crm.lead", "message_post", [[req.lead_id]], {"body": nota})
         except Exception as exc:
@@ -937,7 +959,7 @@ async def pago_webhook(request: Request) -> dict:
                 lead_id = int(lead_id_raw)
                 nota = (
                     f"<p><b>✅ Pago aprobado</b></p>"
-                    f"<p>payment_id: {payment_id} | ref: {ext_ref}</p>"
+                    f"<p>payment_id: {escape(str(payment_id))} | ref: {escape(str(ext_ref))}</p>"
                 )
                 odoo._exec("crm.lead", "message_post", [[lead_id]], {"body": nota})
                 try:
