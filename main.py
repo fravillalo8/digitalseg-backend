@@ -1168,13 +1168,45 @@ class _SMTP_SSL_IPv4(smtplib.SMTP_SSL):
         return self.context.wrap_socket(sock, server_hostname=self._host)
 
 
+def _resend_from() -> str:
+    return os.getenv("RESEND_FROM", "").strip() or "DigitalSeg · Sebastián Cabrera <notificaciones@digitalseg.cl>"
+
+
+def _send_via_resend(subject: str, html: str, to_addresses: list[str]) -> tuple[bool, str]:
+    """Envía por la API HTTP de Resend (puerto 443). Devuelve (ok, detalle)."""
+    api_key = os.getenv("RESEND_API_KEY", "").strip()
+    if not api_key:
+        return False, "sin RESEND_API_KEY"
+    try:
+        r = httpx.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={"from": _resend_from(), "to": to_addresses, "subject": subject, "html": html},
+            timeout=20,
+        )
+        if r.status_code < 300:
+            return True, r.text[:200]
+        return False, f"HTTP {r.status_code}: {r.text[:200]}"
+    except Exception as e:
+        return False, f"{type(e).__name__}: {str(e)[:200]}"
+
+
 def _send_email(subject: str, html: str, to_addresses: list[str]) -> None:
+    # Transporte principal: Resend (HTTPS). Railway bloquea los puertos SMTP
+    # hacia Hostinger, así que SMTP queda solo como respaldo si Resend falla.
+    if os.getenv("RESEND_API_KEY", "").strip():
+        ok, info = _send_via_resend(subject, html, to_addresses)
+        if ok:
+            log.info("Email (Resend) enviado a %s: %s", to_addresses, subject)
+            return
+        log.error("Resend falló (%s) — intento SMTP de respaldo", info)
+
     host = os.getenv("SMTP_HOST", "smtp.hostinger.com").strip() or "smtp.hostinger.com"
     port = int((os.getenv("SMTP_PORT", "587") or "587").strip())
     user = os.getenv("SMTP_USER", "").strip()
     pwd  = os.getenv("SMTP_PASS", "").strip()
     if not user or not pwd:
-        log.warning("SMTP no configurado — email no enviado")
+        log.warning("Email no enviado — ni Resend ni SMTP configurados")
         return
     from_name = os.getenv("SMTP_FROM_NAME", "DigitalSeg · Sebastián Cabrera")
     msg = MIMEMultipart("alternative")
@@ -1209,23 +1241,31 @@ async def _diag_smtp(request: Request) -> dict:
     else:
         masked = "set" if user else "empty"
     out = {
-        "smtp_user_set": bool(user), "smtp_pass_set": bool(pwd),
-        "host": host, "port": port, "user_masked": masked,
         "git": os.getenv("RAILWAY_GIT_COMMIT_SHA", "")[:7],
+        "smtp_user_set": bool(user), "smtp_pass_set": bool(pwd), "smtp_user_masked": masked,
+        "smtp_note": "SMTP hacia Hostinger da timeout desde Railway — usamos Resend",
     }
-    if not user or not pwd:
-        out["login"] = "skipped — faltan SMTP_USER/SMTP_PASS"
-        return out
-    try:
-        if port == 465:
-            with _SMTP_SSL_IPv4(host, port, timeout=15) as s:
-                s.login(user, pwd)
-        else:
-            with _SMTP_IPv4(host, port, timeout=15) as s:
-                s.ehlo(); s.starttls(); s.login(user, pwd)
-        out["login"] = "ok"
-    except Exception as e:
-        out["login"] = f"error: {type(e).__name__}: {str(e)[:200]}"
+    # ── Resend (transporte principal) ──
+    rk = os.getenv("RESEND_API_KEY", "").strip()
+    out["resend_api_key_set"] = bool(rk)
+    out["resend_from"] = _resend_from()
+    if rk:
+        try:
+            rr = httpx.get("https://api.resend.com/domains",
+                           headers={"Authorization": f"Bearer {rk}"}, timeout=15)
+            if rr.status_code < 300:
+                data = rr.json()
+                out["resend_domains"] = [
+                    {"name": d.get("name"), "status": d.get("status")}
+                    for d in (data.get("data") or [])
+                ] or "sin dominios (usa onboarding@resend.dev para probar)"
+                out["resend_check"] = "ok (API key válida)"
+            else:
+                out["resend_check"] = f"HTTP {rr.status_code}: {rr.text[:150]}"
+        except Exception as e:
+            out["resend_check"] = f"{type(e).__name__}: {str(e)[:150]}"
+    else:
+        out["resend_check"] = "skipped — falta RESEND_API_KEY"
     return out
 
 
