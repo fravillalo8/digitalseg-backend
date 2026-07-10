@@ -834,6 +834,11 @@ async def crear_pago(req: PagoRequest, request: Request) -> PagoResponse:
         },
         "auto_return": "approved",
         "statement_descriptor": "DIGITALSEG",
+        # Tope de 6 cuotas para alinear el checkout con la oferta "3 y 6 cuotas precio contado".
+        # OJO: que 3 y 6 cuotas sean SIN INTERÉS (precio contado) depende de la campaña
+        # "Cuotas sin interés" habilitada en la cuenta MercadoPago del vendedor;
+        # esto solo limita el máximo de cuotas mostrado en el checkout.
+        "payment_methods": {"installments": 6},
         "metadata": {
             "lead_id":       req.lead_id,
             "cliente":       req.cliente,
