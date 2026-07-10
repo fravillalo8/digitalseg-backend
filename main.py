@@ -1175,6 +1175,40 @@ def _send_email(subject: str, html: str, to_addresses: list[str]) -> None:
     log.info("Email enviado a %s: %s", to_addresses, subject)
 
 
+# ── GET /api/_diag/smtp ── diagnóstico temporal (NO expone secretos) ──────────
+@app.get("/api/_diag/smtp")
+async def _diag_smtp(request: Request) -> dict:
+    _check_rate(request)
+    host = os.getenv("SMTP_HOST", "smtp.hostinger.com")
+    port = int(os.getenv("SMTP_PORT", "587"))
+    user = os.getenv("SMTP_USER", "")
+    pwd  = os.getenv("SMTP_PASS", "")
+    if "@" in user:
+        u, d = user.split("@", 1)
+        masked = f"{u[:2]}***@{d}"
+    else:
+        masked = "set" if user else "empty"
+    out = {
+        "smtp_user_set": bool(user), "smtp_pass_set": bool(pwd),
+        "host": host, "port": port, "user_masked": masked,
+        "git": os.getenv("RAILWAY_GIT_COMMIT_SHA", "")[:7],
+    }
+    if not user or not pwd:
+        out["login"] = "skipped — faltan SMTP_USER/SMTP_PASS"
+        return out
+    try:
+        if port == 465:
+            with smtplib.SMTP_SSL(host, port, timeout=15) as s:
+                s.login(user, pwd)
+        else:
+            with smtplib.SMTP(host, port, timeout=15) as s:
+                s.ehlo(); s.starttls(); s.login(user, pwd)
+        out["login"] = "ok"
+    except Exception as e:
+        out["login"] = f"error: {type(e).__name__}: {str(e)[:200]}"
+    return out
+
+
 # ── POST /api/informe-seguridad ───────────────────────────────────────────────
 
 _INFORME_RECIPIENTS = ["sebastian.cabrera@digitalseg.cl", "contacto@digitalseg.cl"]
