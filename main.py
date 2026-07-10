@@ -1032,75 +1032,114 @@ def _build_cotizacion_html(
         )
     return f"""<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"></head>
-<body style="margin:0;padding:0;background:#f0f0f0;font-family:Arial,sans-serif">
-<div style="max-width:600px;margin:32px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,.12)">
+<body style="margin:0;padding:0;background:#071426;font-family:Arial,Helvetica,sans-serif">
+<div style="max-width:600px;margin:0 auto;background:#fff">
 
-  <div style="background:#0a0a0a;padding:32px;text-align:center">
-    <p style="margin:0 0 4px;color:#4A90E2;font-size:11px;letter-spacing:.15em;font-weight:700;text-transform:uppercase">Cerraduras Inteligentes</p>
-    <h1 style="margin:0;color:#fff;font-size:26px;font-weight:900;letter-spacing:.02em">DIGITAL<span style="color:#27AE60">SEG</span></h1>
-    <p style="margin:8px 0 0;color:#888;font-size:13px">Valle del Aconcagua · digitalseg.cl</p>
+  <!-- Header oscuro premium -->
+  <div style="background:#0a1b33;padding:34px 32px;text-align:center;border-bottom:3px solid #7ee097">
+    <p style="margin:0 0 6px;color:#9ed0ff;font-size:11px;letter-spacing:.18em;font-weight:700;text-transform:uppercase">Tu cotización personalizada</p>
+    <h1 style="margin:0;color:#fff;font-size:27px;font-weight:900;letter-spacing:.02em">DIGITAL<span style="color:#7ee097">SEG</span></h1>
+    <p style="margin:8px 0 0;color:#8fa6bd;font-size:12px;letter-spacing:.04em">Seguridad Inteligente · Valle del Aconcagua</p>
   </div>
 
-  <div style="padding:32px">
-    <h2 style="margin:0 0 6px;font-size:20px;color:#0a0a0a">Hola, {nombre} 👋</h2>
-    <p style="margin:0 0 24px;color:#555;font-size:15px;line-height:1.6">
-      Aquí está tu cotización según el análisis de compatibilidad del cotizador inteligente.<br>
-      Revisa los detalles y contáctanos cuando quieras avanzar.
+  <!-- Saludo + gancho neuroventas -->
+  <div style="padding:32px 32px 8px">
+    <h2 style="margin:0 0 10px;font-size:22px;color:#0a1b33;font-weight:800">Hola, {nombre} 👋</h2>
+    <p style="margin:0 0 18px;color:#4a5a6a;font-size:15px;line-height:1.65">
+      Preparé esta propuesta pensando en una sola cosa: <strong style="color:#0a1b33">tu tranquilidad</strong>.
+      La llave es el eslabón más débil de tu puerta — se copia, se pierde, se olvida. Mira lo que cambia el día que la dejas atrás.
     </p>
+  </div>
 
-    <div style="background:#f8f9fa;border:1px solid #e0e0e0;border-radius:12px;padding:24px;margin-bottom:24px">
+  <!-- Banda dolor → beneficio (fondo oscuro, estilo cotización) -->
+  <div style="padding:4px 32px 8px">
+    <div style="background:#0a1b33;border-radius:14px;padding:22px 22px 8px">
+      <table style="width:100%;border-collapse:collapse">
+        <tr>
+          <td style="padding:0 0 14px;color:#ff9e9e;font-size:14px;line-height:1.5;vertical-align:top;width:50%">✕ Copias de llave que no controlas</td>
+          <td style="padding:0 0 14px;color:#7ee097;font-size:14px;line-height:1.5;vertical-align:top;width:50%;padding-left:14px">✓ Tú decides quién entra y cuándo</td>
+        </tr>
+        <tr>
+          <td style="padding:0 0 14px;color:#ff9e9e;font-size:14px;line-height:1.5;vertical-align:top">✕ El "¿cerré bien?" a mitad de camino</td>
+          <td style="padding:0 0 14px;color:#7ee097;font-size:14px;line-height:1.5;vertical-align:top;padding-left:14px">✓ Lo confirmas desde el celular</td>
+        </tr>
+        <tr>
+          <td style="padding:0 0 14px;color:#ff9e9e;font-size:14px;line-height:1.5;vertical-align:top">✕ Llegar de noche buscando la llave</td>
+          <td style="padding:0 0 14px;color:#7ee097;font-size:14px;line-height:1.5;vertical-align:top;padding-left:14px">✓ Entras con tu huella, en un segundo</td>
+        </tr>
+      </table>
+    </div>
+  </div>
+
+  <div style="padding:20px 32px 32px">
+    <!-- Tarjeta de producto -->
+    <p style="margin:6px 0 10px;font-size:12px;letter-spacing:.05em;color:#7a91a9;text-transform:uppercase;font-weight:700">Esto recomendamos para ti</p>
+    <div style="background:#f6f9fc;border:1px solid #dfe8f1;border-radius:14px;padding:24px;margin-bottom:22px">
       <div style="margin-bottom:12px">{stock_badge}</div>
-      <h3 style="margin:0 0 4px;font-size:17px;color:#0a0a0a">{producto}</h3>
-      <p style="margin:0 0 16px;color:#888;font-size:12px;letter-spacing:.05em">SKU: {sku}</p>
+      <h3 style="margin:0 0 4px;font-size:18px;color:#0a1b33;font-weight:800">{producto}</h3>
+      <p style="margin:0 0 16px;color:#9fb4c9;font-size:12px;letter-spacing:.05em">SKU: {sku}</p>
 
       <table style="width:100%;border-collapse:collapse;font-size:14px">
         <tr>
-          <td style="padding:8px 0;color:#555;border-bottom:1px solid #eee">Precio unitario</td>
-          <td style="padding:8px 0;text-align:right;font-weight:700;color:#0a0a0a;border-bottom:1px solid #eee">{precio_fmt}</td>
+          <td style="padding:8px 0;color:#5a6b7c;border-bottom:1px solid #e6edf4">Precio unitario</td>
+          <td style="padding:8px 0;text-align:right;font-weight:700;color:#0a1b33;border-bottom:1px solid #e6edf4">{precio_fmt}</td>
         </tr>
         <tr>
-          <td style="padding:8px 0;color:#555;border-bottom:1px solid #eee">Cantidad</td>
-          <td style="padding:8px 0;text-align:right;font-weight:700;color:#0a0a0a;border-bottom:1px solid #eee">{quantity}</td>
+          <td style="padding:8px 0;color:#5a6b7c;border-bottom:1px solid #e6edf4">Cantidad</td>
+          <td style="padding:8px 0;text-align:right;font-weight:700;color:#0a1b33;border-bottom:1px solid #e6edf4">{quantity}</td>
         </tr>
         <tr>
-          <td style="padding:12px 0 0;color:#0a0a0a;font-weight:bold;font-size:16px">Total</td>
-          <td style="padding:12px 0 0;text-align:right;font-weight:900;font-size:20px;color:#27AE60">{total_fmt}</td>
+          <td style="padding:12px 0 0;color:#0a1b33;font-weight:bold;font-size:16px">Total</td>
+          <td style="padding:12px 0 0;text-align:right;font-weight:900;font-size:22px;color:#1b8f4d">{total_fmt}</td>
         </tr>
       </table>
     </div>
 
-    <div style="background:#e8f5e9;border-left:4px solid #27ae60;border-radius:0 8px 8px 0;padding:16px;margin-bottom:24px">
-      <p style="margin:0;font-size:14px;color:#1b5e20">
+    <!-- Entrega / urgencia -->
+    <div style="background:#eafaf0;border-left:4px solid #7ee097;border-radius:0 8px 8px 0;padding:16px;margin-bottom:20px">
+      <p style="margin:0;font-size:14px;color:#0f5a30;line-height:1.55">
         <strong>🚚 Entrega e instalación estimada:</strong> {delivery_days} días hábiles
-        {"— producto disponible en bodega." if in_stock else "— coordinamos desde el pedido."}
+        {"— producto disponible en bodega, agendamos altiro." if in_stock else "— lo conseguimos a pedido y coordinamos la fecha contigo."}
       </p>
     </div>
 
     {install_block}
-    <p style="font-size:13px;color:#777;margin:0 0 20px;line-height:1.6">
-      Cotización referencial. <a href="{odoo_url}" style="color:#4A90E2">Ver cotización en sistema →</a>
-    </p>
 
-    <div style="text-align:center;margin:28px 0 8px">
-      <a href="{wa_url}"
-         style="display:inline-block;background:#25D366;color:#fff;text-decoration:none;padding:14px 32px;border-radius:50px;font-weight:700;font-size:15px">
-        💬 Consultar por WhatsApp
-      </a>
+    <!-- Reencuadre de valor -->
+    <div style="background:#0a1b33;border-radius:12px;padding:20px 22px;margin:4px 0 22px">
+      <p style="margin:0;color:#cfe3f6;font-size:14px;line-height:1.6">
+        No es un gasto: es dejar de depender de un pedazo de metal que cualquiera puede copiar.
+        <span style="color:#7ee097;font-weight:700">Compras una sola vez la tranquilidad de todos los días.</span>
+      </p>
     </div>
-    <p style="text-align:center;font-size:12px;color:#aaa;margin:10px 0 0">
-      También puedes escribirnos al +56 9 4688 0196
+
+    <p style="font-size:12px;color:#9fb4c9;margin:0 0 22px;line-height:1.6">
+      Cotización referencial. <a href="{odoo_url}" style="color:#3f7fc4">Ver cotización en sistema →</a>
     </p>
 
-    <div style="margin-top:28px;padding-top:20px;border-top:1px solid #eee">
-      <p style="margin:0;font-size:15px;color:#0a0a0a;font-weight:800">Sebastián Cabrera</p>
-      <p style="margin:3px 0 0;font-size:13px;color:#777">Gerente de Operaciones · DigitalSeg</p>
-      <p style="margin:3px 0 0;font-size:13px;color:#777">📱 +56 9 4688 0196 &nbsp;·&nbsp; ✉️ sebastian.cabrera@digitalseg.cl</p>
-      <p style="margin:3px 0 0;font-size:13px;color:#777">📍 Valle del Aconcagua · digitalseg.cl</p>
+    <!-- Cierre personal + CTA -->
+    <div style="text-align:center;padding:6px 0 4px">
+      <p style="margin:0 0 16px;font-size:17px;color:#0a1b33;font-weight:800;line-height:1.4">{nombre}, tu propuesta está lista.<br>Solo falta tu sí. 💚</p>
+      <a href="{wa_url}"
+         style="display:inline-block;background:#25D366;color:#fff;text-decoration:none;padding:15px 34px;border-radius:50px;font-weight:800;font-size:16px">
+        💬 Hablar con Sebastián ahora
+      </a>
+      <p style="font-size:12px;color:#9fb4c9;margin:12px 0 0">
+        O escríbele directo al +56 9 4688 0196
+      </p>
+    </div>
+
+    <!-- Firma -->
+    <div style="margin-top:26px;padding-top:20px;border-top:1px solid #e6edf4">
+      <p style="margin:0;font-size:15px;color:#0a1b33;font-weight:800">Sebastián Cabrera</p>
+      <p style="margin:3px 0 0;font-size:13px;color:#7a91a9">Tu asesor de seguridad · DigitalSeg</p>
+      <p style="margin:3px 0 0;font-size:13px;color:#7a91a9">No estás comprando a un desconocido: te acompaño desde la elección hasta la instalación.</p>
+      <p style="margin:8px 0 0;font-size:13px;color:#7a91a9">📱 +56 9 4688 0196 &nbsp;·&nbsp; ✉️ sebastian.cabrera@digitalseg.cl</p>
     </div>
   </div>
 
-  <div style="background:#f5f5f5;padding:16px 32px;text-align:center;font-size:11px;color:#aaa">
-    DigitalSeg Seguridad Inteligente · Valle del Aconcagua · digitalseg.cl
+  <div style="background:#0a1b33;padding:16px 32px;text-align:center;font-size:11px;color:#6f88a3">
+    DigitalSeg · Seguridad Inteligente · Valle del Aconcagua · digitalseg.cl
   </div>
 </div>
 </body></html>"""
