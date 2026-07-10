@@ -9,6 +9,8 @@ import smtplib
 from html import escape
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import formataddr
+from email.header import Header
 from contextlib import asynccontextmanager
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -1153,16 +1155,23 @@ def _send_email(subject: str, html: str, to_addresses: list[str]) -> None:
     if not user or not pwd:
         log.warning("SMTP no configurado — email no enviado")
         return
+    from_name = os.getenv("SMTP_FROM_NAME", "DigitalSeg · Sebastián Cabrera")
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"]    = user
+    msg["From"]    = formataddr((str(Header(from_name, "utf-8")), user))
     msg["To"]      = ", ".join(to_addresses)
     msg.attach(MIMEText(html, "html", "utf-8"))
-    with smtplib.SMTP(host, port) as s:
-        s.ehlo()
-        s.starttls()
-        s.login(user, pwd)
-        s.sendmail(user, to_addresses, msg.as_string())
+    # Puerto 465 = SSL directo; 587 (u otro) = STARTTLS
+    if port == 465:
+        with smtplib.SMTP_SSL(host, port) as s:
+            s.login(user, pwd)
+            s.sendmail(user, to_addresses, msg.as_string())
+    else:
+        with smtplib.SMTP(host, port) as s:
+            s.ehlo()
+            s.starttls()
+            s.login(user, pwd)
+            s.sendmail(user, to_addresses, msg.as_string())
     log.info("Email enviado a %s: %s", to_addresses, subject)
 
 
