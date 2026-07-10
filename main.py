@@ -1148,10 +1148,10 @@ def _build_cotizacion_html(
 
 
 def _send_email(subject: str, html: str, to_addresses: list[str]) -> None:
-    host = os.getenv("SMTP_HOST", "smtp.hostinger.com")
-    port = int(os.getenv("SMTP_PORT", "587"))
-    user = os.getenv("SMTP_USER", "")
-    pwd  = os.getenv("SMTP_PASS", "")
+    host = os.getenv("SMTP_HOST", "smtp.hostinger.com").strip() or "smtp.hostinger.com"
+    port = int((os.getenv("SMTP_PORT", "587") or "587").strip())
+    user = os.getenv("SMTP_USER", "").strip()
+    pwd  = os.getenv("SMTP_PASS", "").strip()
     if not user or not pwd:
         log.warning("SMTP no configurado — email no enviado")
         return
@@ -1179,10 +1179,10 @@ def _send_email(subject: str, html: str, to_addresses: list[str]) -> None:
 @app.get("/api/_diag/smtp")
 async def _diag_smtp(request: Request) -> dict:
     _check_rate(request)
-    host = os.getenv("SMTP_HOST", "smtp.hostinger.com")
-    port = int(os.getenv("SMTP_PORT", "587"))
-    user = os.getenv("SMTP_USER", "")
-    pwd  = os.getenv("SMTP_PASS", "")
+    host = os.getenv("SMTP_HOST", "smtp.hostinger.com").strip() or "smtp.hostinger.com"
+    port = int((os.getenv("SMTP_PORT", "587") or "587").strip())
+    user = os.getenv("SMTP_USER", "").strip()
+    pwd  = os.getenv("SMTP_PASS", "").strip()
     if "@" in user:
         u, d = user.split("@", 1)
         masked = f"{u[:2]}***@{d}"
