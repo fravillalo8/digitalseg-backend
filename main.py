@@ -1199,7 +1199,6 @@ def _send_email(subject: str, html: str, to_addresses: list[str]) -> None:
 # ── GET /api/_diag/smtp ── diagnóstico temporal (NO expone secretos) ──────────
 @app.get("/api/_diag/smtp")
 async def _diag_smtp(request: Request) -> dict:
-    _check_rate(request)
     host = os.getenv("SMTP_HOST", "smtp.hostinger.com").strip() or "smtp.hostinger.com"
     port = int((os.getenv("SMTP_PORT", "587") or "587").strip())
     user = os.getenv("SMTP_USER", "").strip()
