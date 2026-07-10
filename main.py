@@ -6,6 +6,8 @@ import logging
 import hmac
 import hashlib
 import smtplib
+import socket
+import ssl
 from html import escape
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -1147,6 +1149,25 @@ def _build_cotizacion_html(
 </body></html>"""
 
 
+# ── SMTP forzando IPv4 ────────────────────────────────────────────────────────
+# Railway no tiene ruta IPv6 y smtp.hostinger.com resuelve AAAA (Cloudflare) →
+# "Network is unreachable". Resolvemos solo el registro A y conectamos por IPv4;
+# el TLS sigue validando el certificado contra el hostname (server_hostname).
+def _resolve_ipv4(host: str, port: int) -> str:
+    return socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)[0][4][0]
+
+
+class _SMTP_IPv4(smtplib.SMTP):
+    def _get_socket(self, host, port, timeout):
+        return socket.create_connection((_resolve_ipv4(host, port), port), timeout, self.source_address)
+
+
+class _SMTP_SSL_IPv4(smtplib.SMTP_SSL):
+    def _get_socket(self, host, port, timeout):
+        sock = socket.create_connection((_resolve_ipv4(host, port), port), timeout, self.source_address)
+        return self.context.wrap_socket(sock, server_hostname=self._host)
+
+
 def _send_email(subject: str, html: str, to_addresses: list[str]) -> None:
     host = os.getenv("SMTP_HOST", "smtp.hostinger.com").strip() or "smtp.hostinger.com"
     port = int((os.getenv("SMTP_PORT", "587") or "587").strip())
@@ -1163,11 +1184,11 @@ def _send_email(subject: str, html: str, to_addresses: list[str]) -> None:
     msg.attach(MIMEText(html, "html", "utf-8"))
     # Puerto 465 = SSL directo; 587 (u otro) = STARTTLS
     if port == 465:
-        with smtplib.SMTP_SSL(host, port) as s:
+        with _SMTP_SSL_IPv4(host, port, timeout=25) as s:
             s.login(user, pwd)
             s.sendmail(user, to_addresses, msg.as_string())
     else:
-        with smtplib.SMTP(host, port) as s:
+        with _SMTP_IPv4(host, port, timeout=25) as s:
             s.ehlo()
             s.starttls()
             s.login(user, pwd)
@@ -1198,10 +1219,10 @@ async def _diag_smtp(request: Request) -> dict:
         return out
     try:
         if port == 465:
-            with smtplib.SMTP_SSL(host, port, timeout=15) as s:
+            with _SMTP_SSL_IPv4(host, port, timeout=15) as s:
                 s.login(user, pwd)
         else:
-            with smtplib.SMTP(host, port, timeout=15) as s:
+            with _SMTP_IPv4(host, port, timeout=15) as s:
                 s.ehlo(); s.starttls(); s.login(user, pwd)
         out["login"] = "ok"
     except Exception as e:
