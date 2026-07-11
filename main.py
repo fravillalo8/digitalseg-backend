@@ -1217,13 +1217,17 @@ def _build_cotizacion_html(
         '</div>'
     )
 
-    # ── Portal DigitalSeg (garantía + manual) ──
+    # ── Portal DigitalSeg (post-venta: manual, garantía, boleta, soporte IA) ──
     portal_block = (
         '<div style="background:#f6f9fc;border:1px solid #dfe8f1;border-radius:12px;padding:18px 20px;margin-bottom:22px">'
-        '<p style="margin:0 0 6px;color:#0a1b33;font-weight:800;font-size:15px">🔐 Incluye acceso al Portal DigitalSeg</p>'
-        '<p style="margin:0;color:#4a5a6a;font-size:14px;line-height:1.6">Al comprar activas tu cuenta: '
-        '<strong>validas tu garantía</strong> de 12 meses y <strong>descargas el manual</strong> de tu '
-        'cerradura cuando lo necesites, todo en un solo lugar.</p>'
+        '<p style="margin:0 0 10px;color:#0a1b33;font-weight:800;font-size:15px">🔐 Incluye acceso al Portal DigitalSeg</p>'
+        '<p style="margin:0 0 12px;color:#4a5a6a;font-size:14px;line-height:1.6">Después de tu compra activas tu cuenta y tienes todo en un solo lugar:</p>'
+        '<p style="margin:0;color:#0a1b33;font-size:13.5px;line-height:2.05">'
+        '📘 Manual en español de tu cerradura<br>'
+        '🛡️ Registras tu garantía de 12 meses<br>'
+        '🧾 Subes tu boleta o factura como respaldo<br>'
+        '🤖 Soporte con IA que responde tus preguntas'
+        '</p>'
         '</div>'
     )
     return f"""<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"></head>
