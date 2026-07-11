@@ -1146,6 +1146,7 @@ def _build_cotizacion_html(
         return f"${round(n):,.0f}".replace(",", ".")
     contado_fmt = _clp(grand_total * 0.95)
     cuota3_fmt  = _clp(grand_total / 3)
+    cuota6_fmt  = _clp(grand_total / 6)
     neto_fmt    = _clp(grand_total / 1.19)
     iva_fmt     = _clp(grand_total - grand_total / 1.19)
     base_ref    = _clp(grand_total)
@@ -1156,6 +1157,8 @@ def _build_cotizacion_html(
         f'<td style="background:#eafaf0;padding:13px 15px;border-radius:0 8px 8px 0;text-align:right;font-weight:900;color:#1b8f4d">{contado_fmt}</td></tr>'
         f'<tr><td style="background:#f6f9fc;padding:13px 15px;border-radius:8px 0 0 8px;color:#0a1b33;font-weight:700">💳 3 cuotas sin interés</td>'
         f'<td style="background:#f6f9fc;padding:13px 15px;border-radius:0 8px 8px 0;text-align:right;font-weight:900;color:#0a1b33">3 × {cuota3_fmt}</td></tr>'
+        f'<tr><td style="background:#f6f9fc;padding:13px 15px;border-radius:8px 0 0 8px;color:#0a1b33;font-weight:700">💳 6 cuotas sin interés</td>'
+        f'<td style="background:#f6f9fc;padding:13px 15px;border-radius:0 8px 8px 0;text-align:right;font-weight:900;color:#0a1b33">6 × {cuota6_fmt}</td></tr>'
         f'<tr><td style="background:#f6f9fc;padding:13px 15px;border-radius:8px 0 0 8px;color:#0a1b33;font-weight:700">🧾 Con factura <span style="font-weight:400;color:#5a6b7c">· IVA recuperable</span></td>'
         f'<td style="background:#f6f9fc;padding:13px 15px;border-radius:0 8px 8px 0;text-align:right;font-weight:700;color:#0a1b33">Neto {neto_fmt}<br><span style="font-weight:400;color:#7a91a9;font-size:12px">+ IVA {iva_fmt}</span></td></tr>'
         '</table>'
