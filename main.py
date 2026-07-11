@@ -2134,38 +2134,41 @@ async def cotizador_simulacion(request: Request) -> dict:
 
     mid = str(body.get("modelo_id") or "")
     desc = _sim_desc(mid)
+    # Modo tuning (protegido por secreto): permite probar prompt/referencia sin afectar a los visitantes
+    dbg = str(body.get("p_secret") or "") == _SEG_SECRET
+    prompt_override = (str(body.get("prompt_override") or "").strip() if dbg else "")
+    ref_url_override = (str(body.get("ref_url_override") or "").strip() if dbg else "")
+
+    ref_url = ref_url_override or (("https://digitalseg.cl/" + _SIM_IMG[mid]) if _SIM_IMG.get(mid) else "")
 
     # Referencia: foto REAL del producto, para que la simulación muestre la cerradura de verdad
     ref_part = None
-    ref_file = _SIM_IMG.get(mid)
-    if ref_file:
+    if ref_url:
         try:
             async with httpx.AsyncClient(timeout=15) as rc:
-                rr = await rc.get("https://digitalseg.cl/" + ref_file)
+                rr = await rc.get(ref_url)
             if rr.status_code == 200 and rr.content:
                 ref_mime = (rr.headers.get("content-type") or "image/png").split(";")[0].strip().lower()
                 if ref_mime not in ("image/jpeg", "image/png", "image/webp"):
                     ref_mime = "image/png"
                 ref_part = {"inline_data": {"mime_type": ref_mime, "data": base64.b64encode(rr.content).decode()}}
         except Exception as e:
-            log.warning("sim ref img (%s): %s", mid, e)
+            log.warning("sim ref img (%s): %s", ref_url, e)
 
-    if ref_part:
+    if prompt_override:
+        prompt = prompt_override
+    elif ref_part:
         prompt = (
-            "La PRIMERA imagen es la puerta de un cliente. La SEGUNDA imagen es una cerradura "
-            f"inteligente REAL de nuestro catálogo ({desc}). Instala EXACTAMENTE esa cerradura de la "
-            "segunda imagen sobre la puerta de la primera, de forma fotorrealista: respeta su diseño, "
-            "color, forma y proporciones REALES; NO inventes otra cerradura. Colócala vertical a la "
-            "altura de una manija, cerca del canto de apertura, con sombras y reflejos coherentes con "
-            "la luz de la foto. Quita la manilla o cerradura antigua si estorba. Mantén EXACTAMENTE "
-            "igual la puerta, su color y vetas, el marco, el muro, la luz y el ángulo. No agregues "
-            "texto ni marcas de agua. Devuelve solo la foto editada."
+            "La PRIMERA imagen es la puerta de un cliente. La SEGUNDA imagen es la cerradura "
+            f"inteligente REAL que le vamos a instalar ({desc}). Reemplaza la cerradura o manilla "
+            "actual de la puerta por ESA cerradura de la segunda imagen, fotorrealista y bien "
+            "integrada. Respeta su diseño, color y forma REALES; no inventes otra. Tamaño realista y "
+            "proporcionado (ocupa una franja vertical de unos 30 cm junto al canto de apertura); la "
+            "manilla debe verse natural y del largo real, NO exagerada ni colgando. Sombras, reflejos "
+            "y perspectiva coherentes con la luz de la foto. Quita cualquier manilla o cerradura "
+            "antigua. Mantén EXACTAMENTE igual la puerta, su color y vetas, el marco, el muro, la luz "
+            "y el ángulo. Sin texto ni marcas de agua. Devuelve solo la foto editada."
         )
-        parts = [
-            {"inline_data": {"mime_type": mime, "data": img}},
-            ref_part,
-            {"text": prompt},
-        ]
     else:
         prompt = (
             "Edita esta foto de una puerta de forma FOTORREALISTA. Reemplaza la cerradura o manilla "
@@ -2174,10 +2177,11 @@ async def cotizador_simulacion(request: Request) -> dict:
             "instalada de forma natural y proporcional, a la altura de una manija. No agregues texto "
             "ni marcas de agua. Devuelve solo la imagen editada."
         )
-        parts = [
-            {"inline_data": {"mime_type": mime, "data": img}},
-            {"text": prompt},
-        ]
+
+    parts = [{"inline_data": {"mime_type": mime, "data": img}}]
+    if ref_part:
+        parts.append(ref_part)
+    parts.append({"text": prompt})
 
     model = os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image")
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
