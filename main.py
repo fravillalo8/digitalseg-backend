@@ -12,7 +12,7 @@ from html import escape
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formataddr
-from email.header import Header
+from email.header import Header as EmailHeader  # evita colisión con fastapi.Header
 from contextlib import asynccontextmanager
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -1474,7 +1474,7 @@ def _send_email(subject: str, html: str, to_addresses: list[str]) -> None:
     from_name = os.getenv("SMTP_FROM_NAME", "DigitalSeg · Sebastián Cabrera")
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"]    = formataddr((str(Header(from_name, "utf-8")), user))
+    msg["From"]    = formataddr((str(EmailHeader(from_name, "utf-8")), user))
     msg["To"]      = ", ".join(to_addresses)
     msg.attach(MIMEText(html, "html", "utf-8"))
     # Puerto 465 = SSL directo; 587 (u otro) = STARTTLS
@@ -1717,19 +1717,37 @@ async def _selftest_envio(to: str = "fravillalo@gmail.com", c: str = "demo-prueb
     slug = (c or "demo-prueba").strip()
     page_url = f"{_COT_PAGE_BASE}/?c={slug}"
     pixel_url = f"{_PUBLIC_BASE}/t/o.gif?c={slug}"
+    html = _build_envio_html(
+        nombre="Francisco", page_url=page_url, pixel_url=pixel_url, folio="PRUEBA-001"
+    )
+    diag: dict = {"sent_to": dest, "pixel": pixel_url, "page": page_url}
+    _odoo = globals().get("odoo")
+    diag["odoo_present"] = _odoo is not None
     try:
-        html = _build_envio_html(
-            nombre="Francisco", page_url=page_url, pixel_url=pixel_url, folio="PRUEBA-001"
-        )
-        _send_email(
-            subject="[PRUEBA] Tu propuesta DigitalSeg está lista 🔐",
-            html=html,
-            to_addresses=[dest],
-        )
+        diag["odoo_uid"] = getattr(_odoo, "uid", None)
     except Exception as e:
-        log.exception("selftest envio")
-        return {"ok": False, "error": f"{type(e).__name__}: {e}", "sent_to": dest}
-    return {"ok": True, "sent_to": dest, "pixel": pixel_url, "page": page_url}
+        diag["odoo_uid_err"] = f"{type(e).__name__}: {e}"
+    # 1) intento directo por Odoo (para ver el error real si falla)
+    try:
+        mid = _odoo.send_html_email(
+            "[PRUEBA] Tu propuesta DigitalSeg está lista 🔐",
+            html, [dest],
+            email_from=os.getenv("ODOO_MAIL_FROM", "").strip(),
+        )
+        diag["odoo_send"] = f"ok mail_id={mid}"
+        diag["ok"] = True
+        return diag
+    except Exception as e:
+        diag["odoo_send_err"] = f"{type(e).__name__}: {e}"
+    # 2) despachador normal (Odoo→Resend→SMTP) como respaldo
+    try:
+        _send_email("[PRUEBA] Tu propuesta DigitalSeg está lista 🔐", html, [dest])
+        diag["fallback"] = "ok"
+        diag["ok"] = True
+    except Exception as e:
+        diag["fallback_err"] = f"{type(e).__name__}: {e}"
+        diag["ok"] = False
+    return diag
 
 
 # ── Health ──────────────────────────────────────────────────────────────────────
