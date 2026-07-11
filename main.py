@@ -1995,6 +1995,103 @@ async def _run_seguimiento_ep() -> dict:
     return await _run_seguimiento()
 
 
+# ── Agendamiento de instalación por el cliente (post-pago) ───────────────────────
+# Solo Valle del Aconcagua. 24h si hay stock local, 48h si no (el front decide el
+# mínimo; el server valida cobertura + slot libre).
+_COBERTURA_ACONCAGUA = (
+    "aconcagua", "los andes", "andes", "san felipe", "san esteban", "santa maria",
+    "calle larga", "rinconada", "catemu", "panquehue", "putaendo", "llaillay",
+    "llay llay", "llay-llay",
+)
+_INSTALL_HORAS = [10, 12, 15, 17]   # bloques de instalación por día
+_INSTALL_DUR = 2                     # horas por instalación
+
+
+def _en_cobertura(comuna: str) -> bool:
+    c = (comuna or "").strip().lower().translate(str.maketrans("áéíóúü", "aeiouu"))
+    return any(z in c for z in _COBERTURA_ACONCAGUA)
+
+
+@app.get("/api/agenda/disponibilidad")
+async def agenda_disponibilidad() -> dict:
+    """Slots ocupados (fecha+horas) para que el cliente vea disponibilidad. Sin PII."""
+    ocup: dict = {}
+    for ev in _agenda_events:
+        ocup.setdefault(ev.fecha, set()).update(range(ev.hora, ev.hora + ev.duracion))
+    return {
+        "ocupados": [{"fecha": f, "horas": sorted(hs)} for f, hs in ocup.items()],
+        "horas_slot": _INSTALL_HORAS,
+        "duracion": _INSTALL_DUR,
+    }
+
+
+@app.post("/api/instalacion/agendar")
+async def agendar_instalacion(request: Request) -> dict:
+    ip = (request.client.host if request.client else "?") or "?"
+    now = datetime.now().timestamp()
+    _ia_rate[ip] = [t for t in _ia_rate[ip] if now - t < 600]
+    if len(_ia_rate[ip]) >= 8:
+        raise HTTPException(status_code=429, detail="Demasiadas solicitudes, intenta en unos minutos")
+    _ia_rate[ip].append(now)
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON inválido")
+    cliente = str(body.get("cliente") or "").strip()[:120]
+    telefono = str(body.get("telefono") or "").strip()[:30]
+    direccion = str(body.get("direccion") or "").strip()[:200]
+    comuna = str(body.get("comuna") or "").strip()[:80]
+    producto = str(body.get("producto") or "").strip()[:200]
+    fecha = str(body.get("fecha") or "").strip()
+    try:
+        hora = int(body.get("hora"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Horario inválido")
+    if not cliente or not comuna:
+        raise HTTPException(status_code=400, detail="Faltan datos (nombre y comuna)")
+    if not _en_cobertura(comuna):
+        raise HTTPException(status_code=422, detail="Solo instalamos en el Valle del Aconcagua")
+    try:
+        d = datetime.strptime(fecha, "%Y-%m-%d")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Fecha inválida")
+    if d.date() < datetime.now().date():
+        raise HTTPException(status_code=400, detail="La fecha ya pasó")
+    if hora not in _INSTALL_HORAS:
+        raise HTTPException(status_code=400, detail="Horario inválido")
+    async with _agenda_lock:
+        ocupados = {
+            h for ev in _agenda_events if ev.fecha == fecha
+            for h in range(ev.hora, ev.hora + ev.duracion)
+        }
+        if ocupados & set(range(hora, hora + _INSTALL_DUR)):
+            raise HTTPException(status_code=409, detail="Ese horario ya no está disponible, elige otro")
+        global _agenda_next_id
+        dir_full = (direccion + (", " + comuna if comuna else "")).strip(", ")
+        event = AgendaEvent(
+            id=_agenda_next_id, type="implementacion", fecha=fecha, hora=hora,
+            duracion=_INSTALL_DUR, cliente=cliente, telefono=telefono or None,
+            direccion=dir_full or None, producto=producto or None,
+        )
+        _agenda_next_id += 1
+        _agenda_events.append(event)
+        _save_agenda()
+    try:
+        html = (
+            "<div style='font-family:Arial;max-width:520px'>"
+            f"<h2 style='color:#3DAA57'>🔧 Nueva instalación agendada</h2>"
+            f"<p><b>{escape(cliente)}</b> agendó su instalación online.</p>"
+            f"<p><b>📅 {escape(fecha)} a las {hora:02d}:00</b> (aprox. {_INSTALL_DUR}h)</p>"
+            f"<p>📍 {escape(dir_full)}<br>📞 {escape(telefono or '—')}<br>🔐 {escape(producto or '—')}</p>"
+            "</div>"
+        )
+        _send_email(f"🔧 Instalación agendada: {cliente} — {fecha} {hora:02d}:00", html, _ALERT_RECIPIENTS)
+    except Exception as e:
+        log.error("Aviso instalación: %s", e)
+    log.info("Instalación agendada: %s %s %02d:00 (%s)", cliente, fecha, hora, comuna)
+    return {"ok": True, "fecha": fecha, "hora": hora, "message": "¡Instalación agendada!"}
+
+
 # ── Health ──────────────────────────────────────────────────────────────────────
 
 @app.get("/health")
