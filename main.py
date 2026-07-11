@@ -1242,8 +1242,8 @@ def _build_cotizacion_html(
         '🧾 Subes tu boleta o factura como respaldo<br>'
         '🤖 Soporte con IA que responde tus preguntas'
         '</p>'
-        '<a href="https://portal.digitalseg.cl" style="display:inline-block;background:#0a1b33;color:#fff;'
-        'text-decoration:none;padding:11px 22px;border-radius:40px;font-weight:700;font-size:14px">🔐 Entrar al Portal →</a>'
+        f'<a href="https://portal.digitalseg.cl?modelo={sku}" style="display:inline-block;background:#0a1b33;color:#fff;'
+        'text-decoration:none;padding:11px 22px;border-radius:40px;font-weight:700;font-size:14px">🔐 Entrar al Portal (manual + garantía) →</a>'
         '</div>'
     )
     return f"""<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"></head>
