@@ -1139,6 +1139,33 @@ def _build_cotizacion_html(
             '<p style="margin:0;font-size:13px;color:#7a5a00;line-height:1.6">🔧 La instalación profesional es <strong>obligatoria</strong> (garantía 12 meses): <strong>$89.990</strong> madera · <strong>$99.990</strong> reja/fierro.</p>'
             '</div>'
         )
+
+    # ── Formas de pago (palanca neuroventas, misma lógica de la experiencia) ──
+    grand_total = total + install_price
+    def _clp(n: float) -> str:
+        return f"${round(n):,.0f}".replace(",", ".")
+    contado_fmt = _clp(grand_total * 0.95)
+    cuota3_fmt  = _clp(grand_total / 3)
+    neto_fmt    = _clp(grand_total / 1.19)
+    iva_fmt     = _clp(grand_total - grand_total / 1.19)
+    base_ref    = _clp(grand_total)
+    payment_block = (
+        '<p style="margin:2px 0 10px;font-size:12px;letter-spacing:.05em;color:#7a91a9;text-transform:uppercase;font-weight:700">Elige cómo pagar</p>'
+        '<table style="width:100%;border-collapse:separate;border-spacing:0 8px;font-size:14px;margin-bottom:14px">'
+        f'<tr><td style="background:#eafaf0;padding:13px 15px;border-radius:8px 0 0 8px;color:#0f5a30;font-weight:700">💚 Contado <span style="font-weight:400;color:#2f7a4f">· 5% dcto.</span></td>'
+        f'<td style="background:#eafaf0;padding:13px 15px;border-radius:0 8px 8px 0;text-align:right;font-weight:900;color:#1b8f4d">{contado_fmt}</td></tr>'
+        f'<tr><td style="background:#f6f9fc;padding:13px 15px;border-radius:8px 0 0 8px;color:#0a1b33;font-weight:700">💳 3 cuotas sin interés</td>'
+        f'<td style="background:#f6f9fc;padding:13px 15px;border-radius:0 8px 8px 0;text-align:right;font-weight:900;color:#0a1b33">3 × {cuota3_fmt}</td></tr>'
+        f'<tr><td style="background:#f6f9fc;padding:13px 15px;border-radius:8px 0 0 8px;color:#0a1b33;font-weight:700">🧾 Con factura <span style="font-weight:400;color:#5a6b7c">· IVA recuperable</span></td>'
+        f'<td style="background:#f6f9fc;padding:13px 15px;border-radius:0 8px 8px 0;text-align:right;font-weight:700;color:#0a1b33">Neto {neto_fmt}<br><span style="font-weight:400;color:#7a91a9;font-size:12px">+ IVA {iva_fmt}</span></td></tr>'
+        '</table>'
+    )
+    trust_bar = (
+        '<div style="background:#0a1b33;border-radius:12px;padding:15px 18px;margin:6px 0 22px;text-align:center">'
+        '<span style="color:#cfe3f6;font-size:12.5px;line-height:1.9">'
+        '🛡️ Garantía de 12 meses &nbsp;·&nbsp; 📍 +100 instalaciones en el Aconcagua &nbsp;·&nbsp; 🔧 Técnico certificado'
+        '</span></div>'
+    )
     return f"""<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"></head>
 <body style="margin:0;padding:0;background:#071426;font-family:Arial,Helvetica,sans-serif">
 <div style="max-width:600px;margin:0 auto;background:#fff">
@@ -1213,6 +1240,8 @@ def _build_cotizacion_html(
 
     {install_block}
 
+    {payment_block}
+
     <!-- Reencuadre de valor -->
     <div style="background:#0a1b33;border-radius:12px;padding:20px 22px;margin:4px 0 22px">
       <p style="margin:0;color:#cfe3f6;font-size:14px;line-height:1.6">
@@ -1220,6 +1249,8 @@ def _build_cotizacion_html(
         <span style="color:#7ee097;font-weight:700">Compras una sola vez la tranquilidad de todos los días.</span>
       </p>
     </div>
+
+    {trust_bar}
 
     <p style="font-size:12px;color:#9fb4c9;margin:0 0 22px;line-height:1.6">
       Cotización referencial. <a href="{odoo_url}" style="color:#3f7fc4">Ver cotización en sistema →</a>
