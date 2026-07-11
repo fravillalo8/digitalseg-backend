@@ -1234,12 +1234,14 @@ def _build_cotizacion_html(
         '<div style="background:#f6f9fc;border:1px solid #dfe8f1;border-radius:12px;padding:18px 20px;margin-bottom:22px">'
         '<p style="margin:0 0 10px;color:#0a1b33;font-weight:800;font-size:15px">🔐 Incluye acceso al Portal DigitalSeg</p>'
         '<p style="margin:0 0 12px;color:#4a5a6a;font-size:14px;line-height:1.6">Después de tu compra activas tu cuenta y tienes todo en un solo lugar:</p>'
-        '<p style="margin:0;color:#0a1b33;font-size:13.5px;line-height:2.05">'
+        '<p style="margin:0 0 14px;color:#0a1b33;font-size:13.5px;line-height:2.05">'
         '📘 Manual en español de tu cerradura<br>'
         '🛡️ Registras tu garantía de 12 meses<br>'
         '🧾 Subes tu boleta o factura como respaldo<br>'
         '🤖 Soporte con IA que responde tus preguntas'
         '</p>'
+        '<a href="https://portal.digitalseg.cl" style="display:inline-block;background:#0a1b33;color:#fff;'
+        'text-decoration:none;padding:11px 22px;border-radius:40px;font-weight:700;font-size:14px">🔐 Entrar al Portal →</a>'
         '</div>'
     )
     return f"""<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"></head>
