@@ -34,6 +34,7 @@ from models import (
 )
 from odoo_client import OdooClient
 from whatsapp_client import WhatsAppClient
+from conta_client import ContaClient
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 log = logging.getLogger(__name__)
@@ -95,6 +96,7 @@ def _verify_mp_signature(request: Request, data_id: str) -> bool:
 
 odoo: OdooClient
 wa: WhatsAppClient
+conta: ContaClient
 
 # ── Agenda in-memory store ───────────────────────────────────────────────────
 # Se inicializa desde AGENDA_DATA_FILE si existe, o desde seed data.
@@ -162,9 +164,10 @@ def _fecha_hora_label(fecha: str, hora: int) -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    global odoo, wa, _agenda_lock
+    global odoo, wa, conta, _agenda_lock
     odoo = OdooClient()
     wa   = WhatsAppClient()
+    conta = ContaClient()
     _agenda_lock = asyncio.Lock()
     _load_agenda()
     try:
@@ -968,6 +971,15 @@ async def pago_webhook(request: Request) -> dict:
         _processed_payments.add(payment_id)
         if len(_processed_payments) > 5000:
             _processed_payments.clear()
+
+        # Contabilidad (Zentral Conta): registrar la comisión REAL de MercadoPago como egreso.
+        # Idempotente por paymentId en la propia colección → seguro ante reintentos/reinicios.
+        try:
+            res_conta = await conta.registrar_comision_mp(payment)
+            log.info("Conta comisión MP: %s", res_conta)
+        except Exception as exc:
+            log.warning("Conta comisión MP no registrada: %s", exc)
+
         # Odoo: agregar nota de pago confirmado + intentar marcar como ganado
         if lead_id_raw:
             try:
