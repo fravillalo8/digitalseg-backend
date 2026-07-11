@@ -1,6 +1,7 @@
 from __future__ import annotations
 import os
 import json
+import base64
 import asyncio
 import logging
 import hmac
@@ -2053,6 +2054,29 @@ _SIM_DESC = {
     "lyon-olimpo": "cerradura inteligente negra con pantalla, cámara y teclado táctil, cuerpo vertical",
 }
 
+# Foto REAL del producto (en digitalseg.cl) que se le pasa a Gemini como referencia
+_SIM_IMG = {
+    "kaadas-k70-se": "uploads/partners/kaadas-k70-se.png",
+    "kaadas-k20-pro": "uploads/partners/kaadas-k20-pro-max.png",
+    "kaadas-p30": "uploads/partners/kaadas-p30-pro-max.png",
+    "kaadas-q9": "uploads/partners/kaadas-q9-fvp.png",
+    "kaadas-z1": "uploads/partners/kaadas-z1-pro-wifi.png",
+    "kaadas-k9-5w": "uploads/partners/kaadas-k9-5w.png",
+    "kaadas-q15": "uploads/partners/kaadas-q15-5wk.png",
+    "kaadas-s500-5w-black": "uploads/partners/kaadas-s500-5w-black.png",
+    "kaadas-m7w": "uploads/partners/kaadas-m7-w.png",
+    "kaadas-s10": "uploads/partners/kaadas-s10-5w.png",
+    "kaadas-r8-glass": "uploads/partners/kaadas-r8-glass-door.jpg",
+    "kaadas-r8-rim": "uploads/partners/kaadas-r8-5-rim-lock.jpg",
+    "kaadas-ks02a": "uploads/partners/kaadas-ks02a-deadbolt.jpg",
+    "lyon-olimpo": "uploads/partners/lyon-olimpo-camara.jpg",
+    "lyon-titan-doble": "uploads/partners/lyon-titan-doble.jpg",
+    "lyon-titan": "uploads/partners/lyon-titan-exterior.jpg",
+    "lyon-apolo": "uploads/partners/lyon-apolo.jpg",
+    "lyon-domus-wifi": "uploads/partners/lyon-domus-wifi.jpg",
+    "lyon-nexo": "uploads/partners/lyon-nexo-cilindro.jpg",
+}
+
 
 def _sim_desc(mid: str) -> str:
     if mid in _SIM_DESC:
@@ -2108,21 +2132,57 @@ async def cotizador_simulacion(request: Request) -> dict:
     if not key:
         return {"ok": False, "error": "nokey", "reply": "La simulación con IA todavía no está activa."}
 
-    desc = _sim_desc(str(body.get("modelo_id") or ""))
-    prompt = (
-        "Edita esta foto de una puerta de forma FOTORREALISTA. Reemplaza la cerradura o manilla "
-        f"actual por una {desc}. Mantén EXACTAMENTE igual todo lo demás: la puerta, su color, el "
-        "marco, la pared, la iluminación, el ángulo y las sombras. La cerradura nueva debe verse "
-        "instalada de forma natural y proporcional, a la altura de una manija. No agregues texto ni "
-        "marcas de agua. Devuelve solo la imagen editada."
-    )
+    mid = str(body.get("modelo_id") or "")
+    desc = _sim_desc(mid)
+
+    # Referencia: foto REAL del producto, para que la simulación muestre la cerradura de verdad
+    ref_part = None
+    ref_file = _SIM_IMG.get(mid)
+    if ref_file:
+        try:
+            async with httpx.AsyncClient(timeout=15) as rc:
+                rr = await rc.get("https://digitalseg.cl/" + ref_file)
+            if rr.status_code == 200 and rr.content:
+                ref_mime = (rr.headers.get("content-type") or "image/png").split(";")[0].strip().lower()
+                if ref_mime not in ("image/jpeg", "image/png", "image/webp"):
+                    ref_mime = "image/png"
+                ref_part = {"inline_data": {"mime_type": ref_mime, "data": base64.b64encode(rr.content).decode()}}
+        except Exception as e:
+            log.warning("sim ref img (%s): %s", mid, e)
+
+    if ref_part:
+        prompt = (
+            "La PRIMERA imagen es la puerta de un cliente. La SEGUNDA imagen es una cerradura "
+            f"inteligente REAL de nuestro catálogo ({desc}). Instala EXACTAMENTE esa cerradura de la "
+            "segunda imagen sobre la puerta de la primera, de forma fotorrealista: respeta su diseño, "
+            "color, forma y proporciones REALES; NO inventes otra cerradura. Colócala vertical a la "
+            "altura de una manija, cerca del canto de apertura, con sombras y reflejos coherentes con "
+            "la luz de la foto. Quita la manilla o cerradura antigua si estorba. Mantén EXACTAMENTE "
+            "igual la puerta, su color y vetas, el marco, el muro, la luz y el ángulo. No agregues "
+            "texto ni marcas de agua. Devuelve solo la foto editada."
+        )
+        parts = [
+            {"inline_data": {"mime_type": mime, "data": img}},
+            ref_part,
+            {"text": prompt},
+        ]
+    else:
+        prompt = (
+            "Edita esta foto de una puerta de forma FOTORREALISTA. Reemplaza la cerradura o manilla "
+            f"actual por una {desc}. Mantén EXACTAMENTE igual todo lo demás: la puerta, su color, el "
+            "marco, la pared, la iluminación, el ángulo y las sombras. La cerradura nueva debe verse "
+            "instalada de forma natural y proporcional, a la altura de una manija. No agregues texto "
+            "ni marcas de agua. Devuelve solo la imagen editada."
+        )
+        parts = [
+            {"inline_data": {"mime_type": mime, "data": img}},
+            {"text": prompt},
+        ]
+
     model = os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image")
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
     payload = {
-        "contents": [{"parts": [
-            {"inline_data": {"mime_type": mime, "data": img}},
-            {"text": prompt},
-        ]}],
+        "contents": [{"parts": parts}],
         "generationConfig": {"responseModalities": ["IMAGE"]},
     }
     try:
