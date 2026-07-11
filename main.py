@@ -1175,27 +1175,44 @@ def _build_cotizacion_html(
     _no_app = "cerrojo" in _sku
     if _sku.startswith("kaadas"):
         app_name = "App KAADAS"
+        app_feats = [
+            "👤 Huellas, códigos PIN y usuarios",
+            "🔑 Códigos temporales para visitas",
+            "🚪 Abre con huella, código o app",
+            "🔔 Aviso de batería y estado de la cerradura",
+        ]
         app_note = ("La app de KAADAS es estable y directa para lo esencial. Es más "
                     "simple que TTLock o Tuya —menos personalizable— pero confiable para el día a día.")
     elif "domus-wifi" in _sku:
         app_name = "App Tuya Smart"
-        app_note = ("Tuya es una de las plataformas más flexibles del mercado: usuarios, "
-                    "automatizaciones y control total desde el celular.")
+        app_feats = [
+            "🔓 Desbloqueo remoto desde cualquier lugar",
+            "🔑 Contraseñas temporales, de un solo uso y dinámicas",
+            "📹 Se integra con cámaras y videoportero",
+            "🏠 Automatizaciones + aviso en tiempo real de quién entra",
+        ]
+        app_note = ("Tuya conecta tu cerradura con cámaras, luces y sensores en un solo "
+                    "ecosistema, con automatizaciones y control por voz (Alexa / Google). "
+                    "Una de las plataformas más flexibles del mercado.")
     else:
         app_name = "App TTLock"
-        app_note = ("TTLock es una de las apps más flexibles y potentes: creas usuarios, "
-                    "generas y revocas códigos, y ves todo el historial. Mucho más versátil que apps más cerradas.")
+        app_feats = [
+            "🔑 eKeys y códigos: de un solo uso, por fechas o permanentes",
+            "🤝 Compartes acceso por QR o código —sin repartir llaves—",
+            "🕐 Historial en tiempo real: quién entró y a qué hora",
+            "🌐 Abre y administra a distancia con el Gateway",
+        ]
+        app_note = ("TTLock es una de las apps más flexibles y potentes: creas y revocas "
+                    "usuarios, generas códigos con reglas y ves todo el historial. Ideal para "
+                    "arriendos, Airbnb y oficinas.")
+    _feats_html = "<br>".join(app_feats)
     software_block = "" if _no_app else (
         '<p style="margin:2px 0 10px;font-size:12px;letter-spacing:.05em;color:#7a91a9;text-transform:uppercase;font-weight:700">La controlas desde tu celular</p>'
         '<div style="background:#0a1b33;border-radius:14px;padding:20px;margin-bottom:22px">'
-        '<div style="background:#0f2036;border:1px solid #1e3350;border-radius:12px;padding:15px 16px;max-width:300px;margin:0 auto 16px">'
+        '<div style="background:#0f2036;border:1px solid #1e3350;border-radius:12px;padding:15px 16px;max-width:320px;margin:0 auto 16px">'
         f'<p style="margin:0 0 10px;color:#7ee097;font-size:12px;font-weight:700">📱 {app_name}</p>'
-        '<p style="margin:0;color:#cfe3f6;font-size:13px;line-height:2.1">'
-        '👤 Usuarios y huellas ilimitadas<br>'
-        '🔑 Códigos temporales que expiran solos<br>'
-        '🕐 Registro de accesos: quién entró y cuándo<br>'
-        '🌐 Abrir a distancia (con Gateway)'
-        '</p></div>'
+        f'<p style="margin:0;color:#cfe3f6;font-size:13px;line-height:2.1">{_feats_html}</p>'
+        '</div>'
         f'<p style="margin:0;color:#cfe3f6;font-size:14px;line-height:1.6">{app_note}</p>'
         '</div>'
     )
