@@ -1756,6 +1756,112 @@ async def _selftest_envio(to: str = "fravillalo@gmail.com", c: str = "demo-prueb
     return diag
 
 
+# ── Soporte IA del portal (proxy a Claude; key desde env de Railway) ─────────────
+
+_SOPORTE_SYSTEM = (
+    "Eres el asistente de SOPORTE POST-VENTA de DigitalSeg (cerraduras inteligentes, "
+    "Valle del Aconcagua, Chile). El cliente YA COMPRÓ su cerradura. Tu trabajo es "
+    "ayudarlo a instalar, configurar y resolver problemas. Responde en español, amable "
+    "y concreto, máximo 5 líneas, con pasos numerados cuando aplique. Texto plano, SIN "
+    "asteriscos ni markdown.\n\n"
+    "No vendes: el cliente ya es cliente. No des precios salvo que pregunte. Enfócate en "
+    "resolver su problema.\n\n"
+    "APPS SEGÚN LA MARCA/MODELO:\n"
+    "- Lyon (Titán, Olimpo, Apolo, Nexo): app TTLock.\n"
+    "- Lyon Domus WiFi: app Tuya / Smart Life.\n"
+    "- KAADAS: app KAADAS.\n"
+    "Si no sabes el modelo, pregúntalo antes de dar pasos.\n\n"
+    "EMPAREJAR (TTLock): 1) Descarga TTLock y crea cuenta con tu teléfono. 2) Toca el "
+    "teclado de la cerradura para activarla. 3) En la app: Agregar cerradura y selecciónala. "
+    "4) Nómbrala y guarda.\n"
+    "EMPAREJAR (Tuya/Smart Life): descarga la app, WiFi 2.4GHz + Bluetooth activos, "
+    "+ Agregar dispositivo, sigue el asistente.\n"
+    "EMPAREJAR (KAADAS): descarga la app KAADAS, entra al menú admin con la clave maestra "
+    "del manual, Agregar dispositivo por Bluetooth/WiFi.\n\n"
+    "HUELLAS Y CÓDIGOS: se agregan desde la cerradura (menú admin) o desde la app. Los "
+    "códigos pueden ser permanentes, por fechas o de un solo uso.\n\n"
+    "SOPORTE TÉCNICO FRECUENTE:\n"
+    "- Batería baja: usar 4 pilas AA alcalinas (no recargables), duran 12-18 meses; se "
+    "cambian por la parte exterior sin desinstalar.\n"
+    "- No conecta al WiFi: la red debe ser 2.4GHz (no 5GHz); reinicia router y cerradura; "
+    "acerca el teléfono a la puerta al emparejar.\n"
+    "- No reconoce la huella: limpia el sensor, re-enrola con el dedo seco y limpio, "
+    "registra el mismo dedo 2 veces.\n"
+    "- Código olvidado: abre con la app o la tarjeta de administrador; para resetear la "
+    "clave maestra, contacta soporte.\n"
+    "- Cerradura sin respuesta: cárgala desde el exterior con un powerbank (puerto USB en "
+    "la parte baja) y prueba de nuevo.\n"
+    "- Gateway: conéctalo cerca de la cerradura y del router (2.4GHz) para control remoto.\n\n"
+    "GARANTÍA: 12 meses por defectos de fábrica; no cubre mal uso, golpes ni humedad "
+    "extrema. Para hacerla válida, el cliente debe registrar su producto en este portal.\n\n"
+    "REGLAS:\n"
+    "- Si el problema no se resuelve en 2-3 pasos, si requiere visita técnica, o si es un "
+    "defecto de fábrica, deriva a Sebastián Cabrera: WhatsApp +56 9 4688 0196, "
+    "sebastian.cabrera@digitalseg.cl (Lun a Sáb 9:00-19:00).\n"
+    "- Nunca inventes pasos, modelos ni información. Si no estás seguro, dilo y deriva a Sebastián.\n"
+    "- Sé cálido y breve. Texto plano, sin asteriscos."
+)
+_IA_FALLBACK = "No pude responder ahora. Escríbele a Sebastián al WhatsApp +56 9 4688 0196 😊"
+_ia_rate: dict = defaultdict(list)
+
+
+@app.post("/api/soporte-ia")
+async def soporte_ia(request: Request) -> dict:
+    # Rate limit simple: 20 mensajes por IP cada 10 min
+    ip = (request.client.host if request.client else "?") or "?"
+    now = datetime.now().timestamp()
+    _ia_rate[ip] = [t for t in _ia_rate[ip] if now - t < 600]
+    if len(_ia_rate[ip]) >= 20:
+        return {"reply": "Demasiadas consultas seguidas. Espera unos minutos o escríbele a Sebastián al WhatsApp +56 9 4688 0196 😊"}
+    _ia_rate[ip].append(now)
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON inválido")
+    raw = body.get("messages") or []
+    if not isinstance(raw, list) and body.get("message"):
+        raw = [{"role": "user", "content": body.get("message")}]
+    msgs = []
+    for m in list(raw)[-16:]:
+        role = "assistant" if (m.get("role") == "assistant") else "user"
+        content = str(m.get("content") or "").strip()[:1000]
+        if content:
+            msgs.append({"role": role, "content": content})
+    if not msgs or msgs[-1]["role"] != "user":
+        return {"reply": "Cuéntame qué pasa con tu cerradura y te ayudo 😊"}
+
+    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        return {"reply": "Soporte no disponible por ahora. Escríbele a Sebastián al WhatsApp +56 9 4688 0196 😊"}
+    payload = {
+        "model": os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
+        "max_tokens": 400,
+        "system": _SOPORTE_SYSTEM,
+        "messages": msgs,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=25) as client:
+            r = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "content-type": "application/json",
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                },
+                json=payload,
+            )
+        if r.status_code != 200:
+            log.error("Anthropic soporte-ia %s: %s", r.status_code, r.text[:200])
+            return {"reply": _IA_FALLBACK}
+        data = r.json()
+        reply = (data.get("content") or [{}])[0].get("text") or _IA_FALLBACK
+        return {"reply": reply}
+    except Exception as e:
+        log.error("soporte-ia: %s", e)
+        return {"reply": _IA_FALLBACK}
+
+
 # ── Health ──────────────────────────────────────────────────────────────────────
 
 @app.get("/health")
