@@ -1717,14 +1717,18 @@ async def _selftest_envio(to: str = "fravillalo@gmail.com", c: str = "demo-prueb
     slug = (c or "demo-prueba").strip()
     page_url = f"{_COT_PAGE_BASE}/?c={slug}"
     pixel_url = f"{_PUBLIC_BASE}/t/o.gif?c={slug}"
-    html = _build_envio_html(
-        nombre="Francisco", page_url=page_url, pixel_url=pixel_url, folio="PRUEBA-001"
-    )
-    _send_email(
-        subject="[PRUEBA] Tu propuesta DigitalSeg está lista 🔐",
-        html=html,
-        to_addresses=[dest],
-    )
+    try:
+        html = _build_envio_html(
+            nombre="Francisco", page_url=page_url, pixel_url=pixel_url, folio="PRUEBA-001"
+        )
+        _send_email(
+            subject="[PRUEBA] Tu propuesta DigitalSeg está lista 🔐",
+            html=html,
+            to_addresses=[dest],
+        )
+    except Exception as e:
+        log.exception("selftest envio")
+        return {"ok": False, "error": f"{type(e).__name__}: {e}", "sent_to": dest}
     return {"ok": True, "sent_to": dest, "pixel": pixel_url, "page": page_url}
 
 
