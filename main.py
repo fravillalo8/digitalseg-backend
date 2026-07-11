@@ -1730,8 +1730,24 @@ async def _selftest_envio(to: str = "fravillalo@gmail.com", c: str = "demo-prueb
         nombre="Francisco", page_url=page_url, pixel_url=pixel_url, folio="PRUEBA-001"
     )
     diag: dict = {"sent_to": dest, "pixel": pixel_url, "page": page_url}
+    diag["resend_configured"] = bool(os.getenv("RESEND_API_KEY", "").strip())
+    diag["resend_primary"] = os.getenv("RESEND_PRIMARY", "").strip() in ("1", "true", "yes")
+    subj = "[PRUEBA] Tu propuesta DigitalSeg está lista 🔐"
+    # Diagnóstico: probar Resend directo para ver si el dominio ya verifica
+    if diag["resend_configured"]:
+        try:
+            ok, info = _send_via_resend(subj, html, [dest])
+            diag["resend_result"] = "ok" if ok else f"FAIL: {info}"
+            if ok:
+                diag["transport"] = "resend"
+                diag["ok"] = True
+                return diag
+        except Exception as e:
+            diag["resend_result"] = f"EXC: {type(e).__name__}: {e}"
+    # Respaldo: despachador normal (Odoo)
     try:
-        _send_email("[PRUEBA] Tu propuesta DigitalSeg está lista 🔐", html, [dest])
+        _send_email(subj, html, [dest])
+        diag["transport"] = "odoo/fallback"
         diag["ok"] = True
     except Exception as e:
         log.exception("selftest envio")
