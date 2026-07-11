@@ -2077,6 +2077,38 @@ _SIM_IMG = {
     "lyon-nexo": "uploads/partners/lyon-nexo-cilindro.jpg",
 }
 
+# MEJOR referencia: FOTO REAL de una cerradura de ese tipo YA INSTALADA (proporción y manilla reales,
+# no el render de catálogo). Emparejada por tipo: facial / teclado+manilla / perfil delgado / vidrio /
+# reja / sobrepuesta. Son fotos propias en digitalseg.cl/Fotos instalaciones/.
+_SIM_REF_BASE = "https://digitalseg.cl/Fotos%20instalaciones/"
+_SIM_REF = {
+    # Facial + cámara → foto real de una KAADAS facial de frente
+    "kaadas-k70-se": _SIM_REF_BASE + "kaadas-facial-puerta-madera-pared-amarilla-frontal.jpg",
+    "kaadas-k20-pro": _SIM_REF_BASE + "kaadas-facial-puerta-madera-pared-amarilla-frontal.jpg",
+    "kaadas-p30": _SIM_REF_BASE + "kaadas-facial-puerta-madera-pared-amarilla-frontal.jpg",
+    "kaadas-q9": _SIM_REF_BASE + "kaadas-facial-puerta-madera-pared-amarilla-frontal.jpg",
+    "kaadas-z1": _SIM_REF_BASE + "kaadas-facial-puerta-madera-pared-amarilla-frontal.jpg",
+    "lyon-olimpo": _SIM_REF_BASE + "kaadas-facial-puerta-madera-pared-amarilla-frontal.jpg",
+    # Teclado + manilla Push&Pull (sin cámara) → foto real con la manilla curva
+    "kaadas-k9-5w": _SIM_REF_BASE + "kaadas-teclado-puerta-madera-reja.jpg",
+    "kaadas-q15": _SIM_REF_BASE + "kaadas-teclado-puerta-madera-reja.jpg",
+    "kaadas-s500-5w-black": _SIM_REF_BASE + "kaadas-teclado-puerta-madera-reja.jpg",
+    "lyon-apolo": _SIM_REF_BASE + "kaadas-teclado-puerta-madera-reja.jpg",
+    "lyon-domus-wifi": _SIM_REF_BASE + "kaadas-teclado-puerta-madera-reja.jpg",
+    # Perfil delgado → foto real slim
+    "kaadas-m7w": _SIM_REF_BASE + "kaadas-slim-puerta-roja-primer-plano.jpg",
+    "kaadas-s10": _SIM_REF_BASE + "kaadas-slim-puerta-roja-primer-plano.jpg",
+    # Vidrio
+    "kaadas-r8-glass": _SIM_REF_BASE + "kaadas-vidrio-procenter-gym-puerta-frontal.jpg",
+    # Sobrepuesta / cerrojo
+    "kaadas-r8-rim": _SIM_REF_BASE + "digitalseg-cerrojo-sobreponer-huella-llave-reja.jpg",
+    "kaadas-ks02a": _SIM_REF_BASE + "digitalseg-cerrojo-sobreponer-huella-llave-reja.jpg",
+    "lyon-nexo": _SIM_REF_BASE + "digitalseg-cerrojo-sobreponer-huella-llave-reja.jpg",
+    # Reja / portón exterior
+    "lyon-titan-doble": _SIM_REF_BASE + "digitalseg-cerradura-teclado-huella-reja-exterior-aconcagua.jpg",
+    "lyon-titan": _SIM_REF_BASE + "digitalseg-cerradura-teclado-huella-reja-exterior-aconcagua.jpg",
+}
+
 
 def _sim_desc(mid: str) -> str:
     if mid in _SIM_DESC:
@@ -2139,7 +2171,7 @@ async def cotizador_simulacion(request: Request) -> dict:
     prompt_override = (str(body.get("prompt_override") or "").strip() if dbg else "")
     ref_url_override = (str(body.get("ref_url_override") or "").strip() if dbg else "")
 
-    ref_url = ref_url_override or (("https://digitalseg.cl/" + _SIM_IMG[mid]) if _SIM_IMG.get(mid) else "")
+    ref_url = ref_url_override or _SIM_REF.get(mid) or (("https://digitalseg.cl/" + _SIM_IMG[mid]) if _SIM_IMG.get(mid) else "")
 
     # Referencia: foto REAL del producto, para que la simulación muestre la cerradura de verdad
     ref_part = None
