@@ -1924,13 +1924,14 @@ REGLAS DE MECÁNICA (críticas, no las rompas):
 - REJA o portón -> Lyon Titán / Titán Doble.
 - Si la puerta es delgada/hueca, o no puedes confirmar el marco -> sugiere una SOBREPUESTA (R8 RIM) o marca requiere_visita=true.
 - Si la foto es borrosa, no se ve la puerta, o no puedes determinar el material con seguridad -> confianza baja (<0.5) y requiere_visita=true.
+- PUERTA NUEVA / SIN CERRADURA: si la puerta es nueva o está lisa (sin manija ni cerradura instalada, o recién puesta/en obra), reconócelo y marca puerta_nueva=true. Es un caso IDEAL para instalación limpia y prolija; recomienda igual según el MATERIAL y el formato (una puerta nueva y sólida de madera o metal es perfecta para un embutido Push & Pull; una de aluminio nueva -> perfil delgado). En cerradura_actual pon "sin cerradura (puerta nueva)". Sigue priorizando el STOCK.
 
 PRIORIDAD: entre los modelos que calzan TÉCNICAMENTE, prioriza los que estén EN STOCK (te los paso en el mensaje). Nunca recomiendes un modelo que no calce solo porque está en stock.
 
 CATÁLOGO (usa SOLO estos id exactos):
 """ + _VISION_CATALOG + """
 Responde ÚNICAMENTE con un objeto JSON válido (sin texto antes ni después, sin ```), con esta forma exacta:
-{"material":"<qué puerta ves, breve>","cerradura_actual":"<qué cerradura/chapa ves, breve o 'no visible'>","mecanica":"embutir-profundo|perfil-delgado|sobrepuesta|vidrio|reja|cilindro","modelos":["id1","id2"],"razon":"<1-2 frases cálidas explicando por qué, en tú>","confianza":<0.0-1.0>,"requiere_visita":<true|false>,"aviso":"<null, o una advertencia breve si algo no calza>"}
+{"material":"<qué puerta ves, breve>","cerradura_actual":"<qué cerradura/chapa ves, breve o 'no visible'>","puerta_nueva":<true|false>,"mecanica":"embutir-profundo|perfil-delgado|sobrepuesta|vidrio|reja|cilindro","modelos":["id1","id2"],"razon":"<1-2 frases cálidas explicando por qué, en tú>","confianza":<0.0-1.0>,"requiere_visita":<true|false>,"aviso":"<null, o una advertencia breve si algo no calza>"}
 Recomienda 1 o 2 modelos (el mejor primero). Si no estás seguro del material, prioriza la seguridad: requiere_visita=true y recomienda una sobrepuesta."""
 
 
