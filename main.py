@@ -1192,8 +1192,21 @@ def _send_via_resend(subject: str, html: str, to_addresses: list[str]) -> tuple[
 
 
 def _send_email(subject: str, html: str, to_addresses: list[str]) -> None:
-    # Transporte principal: Resend (HTTPS). Railway bloquea los puertos SMTP
-    # hacia Hostinger, así que SMTP queda solo como respaldo si Resend falla.
+    # Railway no alcanza el SMTP de Hostinger (IPv6 sin ruta / puerto 465 timeout).
+    # Orden de transporte: 1) Odoo (su servidor saliente YA funciona para
+    # digitalseg.cl), 2) Resend (HTTPS, si hay API key), 3) SMTP (respaldo).
+    _odoo = globals().get("odoo")
+    if _odoo is not None:
+        try:
+            _odoo.send_html_email(
+                subject, html, to_addresses,
+                email_from=os.getenv("ODOO_MAIL_FROM", "").strip(),
+            )
+            log.info("Email (Odoo) enviado a %s: %s", to_addresses, subject)
+            return
+        except Exception as e:
+            log.error("Envío por Odoo falló (%s) — intento Resend/SMTP", e)
+
     if os.getenv("RESEND_API_KEY", "").strip():
         ok, info = _send_via_resend(subject, html, to_addresses)
         if ok:

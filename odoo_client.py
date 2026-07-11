@@ -273,6 +273,28 @@ class OdooClient:
             pass
         return True
 
+    def send_html_email(
+        self,
+        subject: str,
+        body_html: str,
+        to_addresses: list[str],
+        email_from: str = "",
+    ) -> int:
+        """Envía un correo HTML propio usando el servidor de correo saliente de
+        Odoo (que ya funciona para digitalseg.cl con SPF/DKIM). Crea un
+        mail.mail y lo despacha con force_send."""
+        vals: dict[str, Any] = {
+            "subject": subject,
+            "body_html": body_html,
+            "email_to": ",".join(to_addresses),
+            "auto_delete": True,
+        }
+        if email_from:
+            vals["email_from"] = email_from
+        mail_id = self._exec("mail.mail", "create", [vals])
+        self._exec("mail.mail", "send", [[mail_id]])
+        return mail_id
+
     # ── Calendar events ──────────────────────────────────────────────────────────
 
     def create_calendar_event(
