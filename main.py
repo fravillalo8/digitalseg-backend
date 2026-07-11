@@ -1877,6 +1877,170 @@ async def soporte_ia(request: Request) -> dict:
         return {"reply": _IA_FALLBACK}
 
 
+# ── Cotizador con IA de visión: analiza foto de puerta/cerradura y recomienda ──
+_vision_rate: dict = defaultdict(list)
+
+_VISION_CATALOG = """\
+EMBUTIR PROFUNDO (Push & Pull — necesita puerta SÓLIDA de madera o metal con marco ancho; NO va en perfil delgado de aluminio ni en vidrio):
+- kaadas-k70-se | KAADAS K70 SE | $989.990 | tope de gama, facial 3D + cámara
+- kaadas-k20-pro | KAADAS K20 Pro Max | $689.990 | premium, la más vendida, facial 3D
+- kaadas-p30 | KAADAS P30 Pro Max | $620.491 | facial 0.6s, doble cámara
+- kaadas-q9 | KAADAS Q9 FVP | $589.990 | facial 3D + vena del dedo
+- kaadas-z1 | KAADAS Z1 PRO WiFi | $537.990 | wifi, gama media-alta
+- kaadas-k9-5w | KAADAS K9-5W | $489.990 | push&pull wifi robusta
+- kaadas-q15 | KAADAS Q15-5WK | $389.990 | wifi, ideal depto/airbnb
+- kaadas-s500-5w-black | KAADAS S500-5W Black | $359.990 | best-seller, manilla reversible
+PERFIL DELGADO (para marcos ANGOSTOS de aluminio o herrería):
+- kaadas-m7w | KAADAS M7-W | $289.990 | aluminio/herrería, IP54 exterior
+- kaadas-s10 | KAADAS S10-5W | $237.990 | perfil ultra delgado, aluminio/herrería
+SOBREPUESTA / ESPECIALES:
+- kaadas-r8-glass | KAADAS R8 Glass | $249.990 | SOLO puertas de VIDRIO, sin perforar el cristal
+- kaadas-r8-rim | KAADAS R8-5 RIM | $189.990 | sobrepuesta, NO modifica la puerta (ideal si no calza un embutido)
+- kaadas-ks02a | KAADAS KS02A | $129.990 | deadbolt, bodegas/puertas simples
+REJAS Y PORTONES (exterior, sobrepuesta):
+- lyon-titan-doble | Lyon Titán Doble | $279.990 | rejas, doble lector dentro/fuera
+- lyon-titan | Lyon Titán Exterior | $259.990 | rejas y portones, resistente intemperie
+EMBUTIR ESTÁNDAR (madera/metal):
+- lyon-olimpo | Lyon Olimpo | $289.990 | facial + cámara, europeo
+- lyon-apolo | Lyon Apolo Euro | $259.990 | 5 en 1, reemplaza cilindro europeo
+- lyon-domus-wifi | Lyon Domus WiFi | $179.990 | wifi tuya, económica
+- lyon-nexo | Lyon Nexo Cilindro | $129.990 | reemplaza SOLO el cilindro europeo
+"""
+
+_VISION_IDS = {
+    "kaadas-k70-se", "kaadas-k20-pro", "kaadas-p30", "kaadas-q9", "kaadas-z1",
+    "kaadas-k9-5w", "kaadas-q15", "kaadas-s500-5w-black", "kaadas-m7w", "kaadas-s10",
+    "kaadas-r8-glass", "kaadas-r8-rim", "kaadas-ks02a", "lyon-titan-doble",
+    "lyon-titan", "lyon-olimpo", "lyon-apolo", "lyon-domus-wifi", "lyon-nexo",
+}
+
+_VISION_SYSTEM = """Eres el asesor técnico experto de DigitalSeg (cerraduras inteligentes, Valle del Aconcagua, Chile). Analizas la foto de la puerta y/o la cerradura actual del cliente para recomendar el modelo que MEJOR CALZA, sin equivocarte. Hablas en "tú", cálido y claro, español de Chile.
+
+REGLAS DE MECÁNICA (críticas, no las rompas):
+- Las KAADAS de EMBUTIR PROFUNDO (Push & Pull) necesitan un cajón grande dentro de la puerta: van SOLO en puertas sólidas de madera o metal con marco ancho. NO caben en perfiles delgados de aluminio, ni en vidrio, ni en puertas huecas/muy finas.
+- Puerta de ALUMINIO o marco angosto -> SOLO modelos de PERFIL DELGADO (M7-W, S10).
+- Puerta de VIDRIO templado -> SOLO R8 Glass, y SIEMPRE requiere_visita=true.
+- REJA o portón -> Lyon Titán / Titán Doble.
+- Si la puerta es delgada/hueca, o no puedes confirmar el marco -> sugiere una SOBREPUESTA (R8 RIM) o marca requiere_visita=true.
+- Si la foto es borrosa, no se ve la puerta, o no puedes determinar el material con seguridad -> confianza baja (<0.5) y requiere_visita=true.
+
+PRIORIDAD: entre los modelos que calzan TÉCNICAMENTE, prioriza los que estén EN STOCK (te los paso en el mensaje). Nunca recomiendes un modelo que no calce solo porque está en stock.
+
+CATÁLOGO (usa SOLO estos id exactos):
+""" + _VISION_CATALOG + """
+Responde ÚNICAMENTE con un objeto JSON válido (sin texto antes ni después, sin ```), con esta forma exacta:
+{"material":"<qué puerta ves, breve>","cerradura_actual":"<qué cerradura/chapa ves, breve o 'no visible'>","mecanica":"embutir-profundo|perfil-delgado|sobrepuesta|vidrio|reja|cilindro","modelos":["id1","id2"],"razon":"<1-2 frases cálidas explicando por qué, en tú>","confianza":<0.0-1.0>,"requiere_visita":<true|false>,"aviso":"<null, o una advertencia breve si algo no calza>"}
+Recomienda 1 o 2 modelos (el mejor primero). Si no estás seguro del material, prioriza la seguridad: requiere_visita=true y recomienda una sobrepuesta."""
+
+
+def _parse_vision_json(text: str):
+    if not text:
+        return None
+    a = text.find("{")
+    b = text.rfind("}")
+    if a < 0 or b <= a:
+        return None
+    try:
+        obj = json.loads(text[a:b + 1])
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        return None
+
+
+@app.post("/api/cotizador/vision")
+async def cotizador_vision(request: Request) -> dict:
+    # Rate limit: 8 fotos por IP cada 10 min (la visión es costosa)
+    ip = (request.client.host if request.client else "?") or "?"
+    now = datetime.now().timestamp()
+    _vision_rate[ip] = [t for t in _vision_rate[ip] if now - t < 600]
+    if len(_vision_rate[ip]) >= 8:
+        return {"ok": False, "error": "rate",
+                "reply": "Demasiadas fotos seguidas. Espera unos minutos o envíala por WhatsApp al +56 9 4688 0196."}
+    _vision_rate[ip].append(now)
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON inválido")
+
+    img = str(body.get("image_base64") or "").strip()
+    mime = str(body.get("mime") or "image/jpeg").strip().lower()
+    if img.startswith("data:") and "," in img:
+        head, img = img.split(",", 1)
+        if "image/png" in head:
+            mime = "image/png"
+        elif "image/webp" in head:
+            mime = "image/webp"
+        else:
+            mime = "image/jpeg"
+    img = img.strip()
+    if not img or len(img) < 100:
+        raise HTTPException(status_code=400, detail="Falta la imagen")
+    if len(img) > 9_500_000:  # ~7 MB de imagen
+        return {"ok": False, "error": "size",
+                "reply": "La foto es muy pesada. Prueba con una más liviana o envíala por WhatsApp al +56 9 4688 0196."}
+    if mime not in ("image/jpeg", "image/png", "image/webp"):
+        mime = "image/jpeg"
+
+    ctx = body.get("contexto") or {}
+    ctx_lines = []
+    if isinstance(ctx, dict):
+        if ctx.get("espacio"):
+            ctx_lines.append("Espacio: " + str(ctx.get("espacio")))
+        stock = ctx.get("stock") or []
+        if isinstance(stock, list) and stock:
+            en_stock = [s for s in stock if isinstance(s, str) and s in _VISION_IDS]
+            if en_stock:
+                ctx_lines.append("EN STOCK (instala en 24h, priorízalos si calzan): " + ", ".join(en_stock))
+    ctx_txt = ("\n".join(ctx_lines) + "\n") if ctx_lines else ""
+
+    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        return {"ok": False, "error": "nokey",
+                "reply": "El análisis con IA no está disponible ahora. Envía tu foto por WhatsApp al +56 9 4688 0196 y te recomendamos al toque."}
+
+    payload = {
+        "model": os.getenv("ANTHROPIC_VISION_MODEL", os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")),
+        "max_tokens": 700,
+        "system": _VISION_SYSTEM,
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": mime, "data": img}},
+                {"type": "text", "text": ctx_txt + "Analiza esta foto de mi puerta y/o cerradura y recomiéndame el modelo que calza."},
+            ],
+        }],
+    }
+    try:
+        async with httpx.AsyncClient(timeout=45) as client:
+            r = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "content-type": "application/json",
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                },
+                json=payload,
+            )
+        if r.status_code != 200:
+            log.error("Anthropic vision %s: %s", r.status_code, r.text[:200])
+            return {"ok": False, "error": "ia",
+                    "reply": "No pude analizar la foto ahora. Envíala por WhatsApp al +56 9 4688 0196 y te ayudamos al toque."}
+        data = r.json()
+        text = (data.get("content") or [{}])[0].get("text") or ""
+        result = _parse_vision_json(text)
+        if not result:
+            return {"ok": False, "error": "parse",
+                    "reply": "No pude leer bien la foto. Prueba con otra más clara o envíala por WhatsApp al +56 9 4688 0196."}
+        result["modelos"] = [m for m in (result.get("modelos") or []) if isinstance(m, str) and m in _VISION_IDS][:2]
+        result["ok"] = True
+        return result
+    except Exception as e:
+        log.error("cotizador-vision: %s", e)
+        return {"ok": False, "error": "exc",
+                "reply": "Hubo un problema analizando la foto. Envíala por WhatsApp al +56 9 4688 0196."}
+
+
 # ── Seguimiento automático: alerta 🔥 (tocó pago) + recordatorio (sin abrir 48h) ──
 
 _ALERT_RECIPIENTS = [
