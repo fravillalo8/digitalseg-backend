@@ -332,13 +332,19 @@ async def create_lead(payload: LeadPayload, request: Request) -> LeadResponse:
                     html=html,
                     to_addresses=[c.email],
                 )
+                lead_html = _build_lead_html(
+                    c, rec, req, quantity, install_label, install_price,
+                    lead_url=odoo.lead_url(lead_id),
+                    sale_url=odoo.sale_url(sale_order_id),
+                    source=payload.source,
+                )
                 _send_email(
-                    subject=f"[Lead] {c.nombre} — {rec.brand} {rec.name} × {quantity}",
-                    html=html,
+                    subject=f"🔔 Nuevo lead: {c.nombre} — {rec.brand} {rec.name} × {quantity}",
+                    html=lead_html,
                     to_addresses=_INFORME_RECIPIENTS,
                 )
                 email_sent = True
-                log.info("Email cotización enviado al cliente %s y al equipo", c.email)
+                log.info("Email cotización enviado al cliente %s y resumen de lead al equipo", c.email)
             except Exception as e:
                 log.error("Error enviando email de cotización: %s", e)
 
@@ -989,6 +995,106 @@ async def pago_webhook(request: Request) -> dict:
 
 
 # ── Email helpers ─────────────────────────────────────────────────────────────
+
+_SPACE_LABELS = {
+    "casa": "Casa", "departamento": "Departamento", "oficina": "Oficina",
+    "local": "Local comercial", "airbnb": "Arriendo / Airbnb", "bodega": "Bodega",
+    "parcela": "Parcela / Reja", "cajon": "Cajón / Mueble",
+}
+_DOOR_LABELS = {
+    "madera": "Puerta de madera", "metal": "Puerta de metal", "reja": "Reja / Fierro",
+    "vidrio": "Puerta de vidrio", "cajon": "Cajón / Mueble",
+}
+
+
+def _build_lead_html(c, rec, req, quantity: int, install_label: str,
+                     install_price: float, lead_url: str, sale_url: str,
+                     source: str) -> str:
+    """Correo INTERNO para el equipo (Sebastián): resumen del lead para el
+    seguimiento, con botón de WhatsApp directo al cliente. No es de venta."""
+    nombre = escape(str(c.nombre))
+    ciudad = escape(str(c.ciudad or "—"))
+    email  = escape(str(c.email or "—"))
+    tel     = escape(str(c.telefono or "—"))
+    wa_digits = "".join(ch for ch in str(c.telefono or "") if ch.isdigit())
+    producto = escape(f"{rec.brand} {rec.name}")
+    sku      = escape(str(rec.sku))
+    precio   = f"${rec.price:,.0f}".replace(",", ".")
+    inst     = (f"{escape(install_label)} · ${install_price:,.0f}".replace(",", ".")
+                if install_price else "No especificada")
+    space = _SPACE_LABELS.get((req.space or "").lower(), escape(str(req.space or "—")))
+    door  = _DOOR_LABELS.get((req.doorType or "").lower(), escape(str(req.doorType or "—")))
+    if req.budgetMax and req.budgetMax < 9_999_999:
+        pmin = f"${(req.budgetMin or 0):,.0f}".replace(",", ".")
+        pmax = f"${req.budgetMax:,.0f}".replace(",", ".")
+        presup = f"{pmin} – {pmax}"
+    else:
+        presup = "Sin definir"
+    formal = ""
+    if getattr(c, "cotizacionFormal", False):
+        formal = (f'<tr><td style="padding:6px 0;color:#7a91a9">Cotización formal</td>'
+                  f'<td style="padding:6px 0;color:#0a1b33;font-weight:600">Sí · {escape(str(c.razonSocial or ""))} '
+                  f'{escape(str(c.rut or ""))}</td></tr>')
+    wa_link = (f"https://wa.me/{wa_digits}?text=" +
+               f"Hola%20{nombre.split(' ')[0]}%2C%20soy%20Sebasti%C3%A1n%20de%20DigitalSeg.%20"
+               f"Vi%20tu%20cotizaci%C3%B3n%20de%20la%20{producto.replace(' ', '%20')}%20y%20quiero%20ayudarte%20a%20avanzar."
+               ) if wa_digits else ""
+    wa_btn = (f'<a href="{wa_link}" style="display:inline-block;background:#25D366;color:#fff;'
+              f'text-decoration:none;padding:12px 26px;border-radius:40px;font-weight:800;font-size:15px">'
+              f'💬 Escribir a {nombre.split(" ")[0]} por WhatsApp</a>') if wa_link else ""
+
+    def row(label, value):
+        return (f'<tr><td style="padding:6px 0;color:#7a91a9;white-space:nowrap;vertical-align:top">{label}</td>'
+                f'<td style="padding:6px 0;color:#0a1b33;font-weight:600">{value}</td></tr>')
+
+    return f"""<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#eef2f6;font-family:Arial,Helvetica,sans-serif">
+<div style="max-width:600px;margin:0 auto;background:#fff">
+  <div style="background:#0a1b33;padding:22px 28px">
+    <p style="margin:0 0 3px;color:#7ee097;font-size:11px;letter-spacing:.14em;font-weight:700;text-transform:uppercase">🔔 Nuevo lead del cotizador</p>
+    <h1 style="margin:0;color:#fff;font-size:22px;font-weight:900">{nombre}</h1>
+    <p style="margin:4px 0 0;color:#8fa6bd;font-size:12px">Origen: {escape(str(source or "cotizador web"))}</p>
+  </div>
+  <div style="padding:24px 28px">
+    <div style="text-align:center;margin:0 0 22px">{wa_btn}</div>
+
+    <p style="margin:0 0 6px;font-size:11px;letter-spacing:.06em;color:#7a91a9;text-transform:uppercase;font-weight:700">Contacto</p>
+    <table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:20px">
+      {row("WhatsApp", tel)}
+      {row("Email", email)}
+      {row("Ciudad", ciudad)}
+    </table>
+
+    <p style="margin:0 0 6px;font-size:11px;letter-spacing:.06em;color:#7a91a9;text-transform:uppercase;font-weight:700">Qué cotizó</p>
+    <table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:20px">
+      {row("Producto", producto)}
+      {row("SKU", sku)}
+      {row("Cantidad", quantity)}
+      {row("Precio unitario", precio)}
+      {row("Instalación", inst)}
+      {formal}
+    </table>
+
+    <p style="margin:0 0 6px;font-size:11px;letter-spacing:.06em;color:#7a91a9;text-transform:uppercase;font-weight:700">Contexto de la puerta</p>
+    <table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:20px">
+      {row("Espacio", space)}
+      {row("Tipo de puerta", door)}
+      {row("Presupuesto", presup)}
+      {row("Grosor / medidas", "A confirmar en visita técnica")}
+    </table>
+
+    <div style="background:#f6f9fc;border:1px solid #dfe8f1;border-radius:10px;padding:14px 16px;font-size:13px">
+      <a href="{lead_url}" style="color:#3f7fc4;font-weight:700">Ver lead en Odoo →</a>
+      {'&nbsp;·&nbsp; <a href="' + sale_url + '" style="color:#3f7fc4;font-weight:700">Ver cotización →</a>' if sale_url else ''}
+    </div>
+  </div>
+  <div style="background:#0a1b33;padding:12px 28px;text-align:center;font-size:11px;color:#6f88a3">
+    DigitalSeg · notificación interna de lead
+  </div>
+</div>
+</body></html>"""
+
 
 def _build_cotizacion_html(
     nombre: str,
