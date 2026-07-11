@@ -1241,47 +1241,6 @@ def _send_email(subject: str, html: str, to_addresses: list[str]) -> None:
     log.info("Email enviado a %s: %s", to_addresses, subject)
 
 
-# ── GET /api/_diag/smtp ── diagnóstico temporal (NO expone secretos) ──────────
-@app.get("/api/_diag/smtp")
-async def _diag_smtp(request: Request) -> dict:
-    host = os.getenv("SMTP_HOST", "smtp.hostinger.com").strip() or "smtp.hostinger.com"
-    port = int((os.getenv("SMTP_PORT", "587") or "587").strip())
-    user = os.getenv("SMTP_USER", "").strip()
-    pwd  = os.getenv("SMTP_PASS", "").strip()
-    if "@" in user:
-        u, d = user.split("@", 1)
-        masked = f"{u[:2]}***@{d}"
-    else:
-        masked = "set" if user else "empty"
-    out = {
-        "git": os.getenv("RAILWAY_GIT_COMMIT_SHA", "")[:7],
-        "smtp_user_set": bool(user), "smtp_pass_set": bool(pwd), "smtp_user_masked": masked,
-        "smtp_note": "SMTP hacia Hostinger da timeout desde Railway — usamos Resend",
-    }
-    # ── Resend (transporte principal) ──
-    rk = os.getenv("RESEND_API_KEY", "").strip()
-    out["resend_api_key_set"] = bool(rk)
-    out["resend_from"] = _resend_from()
-    if rk:
-        try:
-            rr = httpx.get("https://api.resend.com/domains",
-                           headers={"Authorization": f"Bearer {rk}"}, timeout=15)
-            if rr.status_code < 300:
-                data = rr.json()
-                out["resend_domains"] = [
-                    {"name": d.get("name"), "status": d.get("status")}
-                    for d in (data.get("data") or [])
-                ] or "sin dominios (usa onboarding@resend.dev para probar)"
-                out["resend_check"] = "ok (API key válida)"
-            else:
-                out["resend_check"] = f"HTTP {rr.status_code}: {rr.text[:150]}"
-        except Exception as e:
-            out["resend_check"] = f"{type(e).__name__}: {str(e)[:150]}"
-    else:
-        out["resend_check"] = "skipped — falta RESEND_API_KEY"
-    return out
-
-
 # ── POST /api/informe-seguridad ───────────────────────────────────────────────
 
 _INFORME_RECIPIENTS = ["sebastian.cabrera@digitalseg.cl", "contacto@digitalseg.cl"]
