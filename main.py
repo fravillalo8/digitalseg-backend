@@ -194,13 +194,44 @@ if _dev_mode:
         "http://127.0.0.1:3000",
     ]
 
+# Subdominios internos que llaman al backend (CRM Zentral, página de valor, portal)
+for _extra_origin in (
+    "https://zentral.digitalseg.cl",
+    "https://cotizacion.digitalseg.cl",
+    "https://portal.digitalseg.cl",
+):
+    if _extra_origin not in _cors_origins:
+        _cors_origins.append(_extra_origin)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
     allow_origin_regex=(r"http://(localhost|127\.0\.0\.1)(:\d+)?" if _dev_mode else None),
     allow_methods=["POST", "GET", "OPTIONS"],
-    allow_headers=["Content-Type", "X-Admin-Key"],
+    allow_headers=["Content-Type", "X-Admin-Key", "X-Sb-Token"],
     allow_credentials=False,
+)
+
+# ── Rastreo de propuestas: pixel de apertura de correo + envío desde el CRM ──────
+_PUBLIC_BASE = os.getenv(
+    "PUBLIC_BASE_URL", "https://digitalseg-backend-production.up.railway.app"
+).rstrip("/")
+_COT_PAGE_BASE = os.getenv("COT_PAGE_BASE", "https://cotizacion.digitalseg.cl/q/").rstrip("/")
+_DS_SUPA_URL = os.getenv(
+    "DIGITALSEG_SUPABASE_URL", "https://yinsujnsbixfledbpmma.supabase.co"
+).rstrip("/")
+# anon key PÚBLICA (protegida por RLS) — mismo proyecto que el CRM Zentral
+_DS_SUPA_ANON = os.getenv(
+    "DIGITALSEG_SUPABASE_ANON",
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlpbnN1am5zYml4ZmxlZGJwbW1hIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMzNjA1NjEsImV4cCI6MjA5ODkzNjU2MX0.BWQMfU7SfZefJC5xSYdbefR9AvQIOHz4AhN6r-vEJJY",
+)
+_CRM_ALLOWED_EMAILS = {
+    "sebastian.cabrera@digitalseg.cl",
+    "francisco.villalobos@digitalseg.cl",
+}
+# GIF transparente de 1×1 (pixel de rastreo de apertura)
+_PIXEL_GIF = bytes.fromhex(
+    "47494638396101000100800000000000ffffff21f90401000000002c00000000010001000002024401003b"
 )
 
 @app.middleware("http")
@@ -1548,6 +1579,153 @@ async def informe_seguridad(req: InformeSeguridad, request: Request) -> dict:
         log.warning("Odoo lead calculadora no creado (no bloquea): %s", exc)
 
     return {"ok": True, "message": "Informe enviado"}
+
+
+# ── Rastreo de propuestas: pixel de apertura + envío desde el CRM ────────────────
+
+def _build_envio_html(nombre: str, page_url: str, pixel_url: str, folio: str = "") -> str:
+    """Correo breve estilo DigitalSeg que invita a abrir la página de valor.
+    Incluye un pixel invisible al final para registrar la apertura del correo."""
+    nm = escape((nombre or "").split(" ")[0] or "Hola")
+    folio_txt = escape(f"Propuesta {folio}") if folio else "Tu propuesta personalizada"
+    return f"""\
+<!doctype html><html lang="es"><body style="margin:0;padding:0;background:#0f1115;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0f1115;padding:28px 12px;">
+<tr><td align="center">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#151922;border-radius:16px;overflow:hidden;border:1px solid #232a36;">
+    <tr><td style="background:linear-gradient(135deg,#0f1115,#1c2430);padding:26px 28px;border-bottom:2px solid #3DAA57;">
+      <div style="color:#3DAA57;font:700 13px/1 Arial,sans-serif;letter-spacing:2px;text-transform:uppercase;">DigitalSeg</div>
+      <div style="color:#eef2f7;font:700 22px/1.3 Arial,sans-serif;margin-top:8px;">{nm}, tu propuesta está lista 🔐</div>
+    </td></tr>
+    <tr><td style="padding:26px 28px;color:#c4ccd8;font:400 15px/1.65 Arial,sans-serif;">
+      <p style="margin:0 0 14px;">Preparamos algo pensado en tu tranquilidad: una propuesta hecha a tu medida, con tu producto, tu instalación y las formas de pago.</p>
+      <p style="margin:0 0 22px;">Ábrela con calma — tómate tu tiempo para verla:</p>
+      <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto;"><tr><td style="border-radius:12px;background:#3DAA57;">
+        <a href="{page_url}" style="display:inline-block;padding:15px 34px;color:#0f1115;font:700 16px Arial,sans-serif;text-decoration:none;border-radius:12px;">Ver mi propuesta →</a>
+      </td></tr></table>
+      <p style="margin:22px 0 0;font-size:13px;color:#8a94a6;">Si el botón no abre, copia este enlace:<br><a href="{page_url}" style="color:#3DAA57;word-break:break-all;">{page_url}</a></p>
+    </td></tr>
+    <tr><td style="padding:20px 28px;border-top:1px solid #232a36;color:#8a94a6;font:400 13px/1.6 Arial,sans-serif;">
+      Cualquier duda, te atiende personalmente <b style="color:#c4ccd8;">Sebastián Cabrera</b> · tu asesor de seguridad<br>
+      WhatsApp <a href="https://wa.me/56946880196" style="color:#3DAA57;">+56 9 4688 0196</a> · {folio_txt}
+    </td></tr>
+  </table>
+</td></tr></table>
+<img src="{pixel_url}" width="1" height="1" alt="" style="display:block;width:1px;height:1px;opacity:0;overflow:hidden;border:0;"/>
+</body></html>"""
+
+
+@app.get("/t/o.gif")
+async def track_email_open(c: str = "") -> Response:
+    """Pixel invisible: cuando el cliente abre el correo, marca la propuesta como
+    'vista' y suma una apertura en cotizaciones_pub. Siempre responde el GIF."""
+    slug = (c or "").strip()
+    if slug:
+        try:
+            async with httpx.AsyncClient(timeout=6) as client:
+                await client.post(
+                    f"{_DS_SUPA_URL}/rest/v1/rpc/marcar_correo_abierto",
+                    headers={
+                        "apikey": _DS_SUPA_ANON,
+                        "Authorization": f"Bearer {_DS_SUPA_ANON}",
+                        "Content-Type": "application/json",
+                    },
+                    json={"p_slug": slug},
+                )
+        except Exception as e:
+            log.warning("Pixel apertura (%s): %s", slug, e)
+    return Response(
+        content=_PIXEL_GIF,
+        media_type="image/gif",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, private, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
+
+
+async def _verify_crm_user(token: str) -> str:
+    """Valida el token de sesión Supabase del CRM y exige que el correo sea uno
+    de los autorizados. Evita exponer una llave estática en el navegador."""
+    token = (token or "").strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Falta la sesión de Zentral")
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            r = await client.get(
+                f"{_DS_SUPA_URL}/auth/v1/user",
+                headers={"apikey": _DS_SUPA_ANON, "Authorization": f"Bearer {token}"},
+            )
+    except Exception:
+        raise HTTPException(status_code=503, detail="No se pudo validar la sesión")
+    if r.status_code != 200:
+        raise HTTPException(status_code=401, detail="Sesión inválida o expirada")
+    email = (r.json().get("email") or "").strip().lower()
+    if email not in _CRM_ALLOWED_EMAILS:
+        raise HTTPException(status_code=403, detail="Usuario no autorizado")
+    return email
+
+
+@app.post("/api/cotizacion/enviar")
+async def enviar_cotizacion_correo(
+    request: Request,
+    x_sb_token: Optional[str] = Header(default=None),
+) -> dict:
+    """Envía al cliente la propuesta (página de valor) por correo, con el pixel de
+    rastreo. Autenticado con la sesión del CRM (X-Sb-Token)."""
+    await _verify_crm_user(x_sb_token or "")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON inválido")
+    slug = str(body.get("slug") or "").strip()
+    email = str(body.get("email") or "").strip()
+    nombre = str(body.get("nombre") or "").strip() or "Hola"
+    folio = str(body.get("folio") or "").strip()
+    if not slug or "@" not in email:
+        raise HTTPException(status_code=400, detail="Falta slug o email válido")
+    page_url = f"{_COT_PAGE_BASE}/?c={slug}"
+    pixel_url = f"{_PUBLIC_BASE}/t/o.gif?c={slug}"
+    html = _build_envio_html(nombre=nombre, page_url=page_url, pixel_url=pixel_url, folio=folio)
+    try:
+        _send_email(
+            subject="Tu propuesta DigitalSeg está lista 🔐",
+            html=html,
+            to_addresses=[email],
+        )
+    except Exception as e:
+        log.error("Envío de cotización por correo falló: %s", e)
+        raise HTTPException(status_code=502, detail="No se pudo enviar el correo")
+    log.info("Cotización %s enviada por correo a %s", folio or slug, email)
+    return {"ok": True, "email": email}
+
+
+@app.get("/api/_selftest-envio")
+async def _selftest_envio(to: str = "fravillalo@gmail.com", c: str = "demo-prueba") -> dict:
+    """Prueba de entrega del correo de propuesta (con pixel). SOLO envía a una
+    allowlist de correos del dueño, así no puede usarse para spam."""
+    allow = {
+        "fravillalo@gmail.com",
+        "contacto@digitalseg.cl",
+        "sebastian.cabrera@digitalseg.cl",
+        "francisco.villalobos@digitalseg.cl",
+    }
+    dest = (to or "").strip().lower()
+    if dest not in allow:
+        raise HTTPException(status_code=403, detail="Destino no permitido")
+    slug = (c or "demo-prueba").strip()
+    page_url = f"{_COT_PAGE_BASE}/?c={slug}"
+    pixel_url = f"{_PUBLIC_BASE}/t/o.gif?c={slug}"
+    html = _build_envio_html(
+        nombre="Francisco", page_url=page_url, pixel_url=pixel_url, folio="PRUEBA-001"
+    )
+    _send_email(
+        subject="[PRUEBA] Tu propuesta DigitalSeg está lista 🔐",
+        html=html,
+        to_addresses=[dest],
+    )
+    return {"ok": True, "sent_to": dest, "pixel": pixel_url, "page": page_url}
 
 
 # ── Health ──────────────────────────────────────────────────────────────────────
