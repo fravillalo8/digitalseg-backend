@@ -2034,11 +2034,119 @@ async def cotizador_vision(request: Request) -> dict:
                     "reply": "No pude leer bien la foto. Prueba con otra más clara o envíala por WhatsApp al +56 9 4688 0196."}
         result["modelos"] = [m for m in (result.get("modelos") or []) if isinstance(m, str) and m in _VISION_IDS][:2]
         result["ok"] = True
+        result["sim"] = bool(os.getenv("GEMINI_API_KEY", "").strip())  # habilita el botón de simulación solo si hay key
         return result
     except Exception as e:
         log.error("cotizador-vision: %s", e)
         return {"ok": False, "error": "exc",
                 "reply": "Hubo un problema analizando la foto. Envíala por WhatsApp al +56 9 4688 0196."}
+
+
+# ── Simulación visual: la puerta del cliente con la cerradura nueva puesta (Gemini) ──
+_sim_rate: dict = defaultdict(list)
+
+_SIM_DESC = {
+    "kaadas-k70-se": "cerradura inteligente KAADAS de embutir, cuerpo vertical negro mate con manilla Push & Pull, pantalla táctil con teclado numérico y lector de huella",
+    "kaadas-k20-pro": "cerradura inteligente KAADAS negra de embutir con manilla vertical Push & Pull, panel táctil con teclado numérico y lector facial",
+    "kaadas-q9": "cerradura inteligente KAADAS negra de embutir con panel de reconocimiento facial y teclado táctil",
+    "kaadas-s500-5w-black": "cerradura inteligente KAADAS negra con manilla horizontal y lector de huella con teclado táctil",
+    "lyon-olimpo": "cerradura inteligente negra con pantalla, cámara y teclado táctil, cuerpo vertical",
+}
+
+
+def _sim_desc(mid: str) -> str:
+    if mid in _SIM_DESC:
+        return _SIM_DESC[mid]
+    mid = mid or ""
+    if "glass" in mid:
+        return "cerradura inteligente para puerta de vidrio, módulo compacto negro montado sobre el cristal (sin perforar) con teclado táctil"
+    if "s10" in mid or "m7w" in mid:
+        return "cerradura inteligente de perfil delgado negra, panel angosto vertical con teclado táctil, montada sobre un marco de aluminio"
+    if "rim" in mid:
+        return "cerradura inteligente sobrepuesta negra montada sobre la cara interior de la puerta, con teclado táctil"
+    if "titan" in mid:
+        return "cerradura inteligente exterior robusta negra montada sobre una reja o portón metálico, con teclado y lector de huella"
+    if "nexo" in mid:
+        return "cilindro inteligente negro con teclado táctil que reemplaza la cerradura existente"
+    return "cerradura inteligente moderna negra de embutir, con manilla, teclado táctil y lector de huella"
+
+
+@app.post("/api/cotizador/simulacion")
+async def cotizador_simulacion(request: Request) -> dict:
+    # Rate limit estricto: 5 simulaciones por IP cada 10 min (la generación es cara)
+    ip = (request.client.host if request.client else "?") or "?"
+    now = datetime.now().timestamp()
+    _sim_rate[ip] = [t for t in _sim_rate[ip] if now - t < 600]
+    if len(_sim_rate[ip]) >= 5:
+        return {"ok": False, "error": "rate", "reply": "Demasiadas simulaciones seguidas. Espera unos minutos."}
+    _sim_rate[ip].append(now)
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON inválido")
+
+    img = str(body.get("image_base64") or "").strip()
+    mime = str(body.get("mime") or "image/jpeg").strip().lower()
+    if img.startswith("data:") and "," in img:
+        head, img = img.split(",", 1)
+        if "image/png" in head:
+            mime = "image/png"
+        elif "image/webp" in head:
+            mime = "image/webp"
+        else:
+            mime = "image/jpeg"
+    img = img.strip()
+    if not img or len(img) < 100:
+        raise HTTPException(status_code=400, detail="Falta la imagen")
+    if len(img) > 9_500_000:
+        return {"ok": False, "error": "size", "reply": "La foto es muy pesada para la simulación."}
+    if mime not in ("image/jpeg", "image/png", "image/webp"):
+        mime = "image/jpeg"
+
+    key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not key:
+        return {"ok": False, "error": "nokey", "reply": "La simulación con IA todavía no está activa."}
+
+    desc = _sim_desc(str(body.get("modelo_id") or ""))
+    prompt = (
+        "Edita esta foto de una puerta de forma FOTORREALISTA. Reemplaza la cerradura o manilla "
+        f"actual por una {desc}. Mantén EXACTAMENTE igual todo lo demás: la puerta, su color, el "
+        "marco, la pared, la iluminación, el ángulo y las sombras. La cerradura nueva debe verse "
+        "instalada de forma natural y proporcional, a la altura de una manija. No agregues texto ni "
+        "marcas de agua. Devuelve solo la imagen editada."
+    )
+    model = os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
+    payload = {
+        "contents": [{"parts": [
+            {"inline_data": {"mime_type": mime, "data": img}},
+            {"text": prompt},
+        ]}],
+        "generationConfig": {"responseModalities": ["IMAGE"]},
+    }
+    try:
+        async with httpx.AsyncClient(timeout=90) as client:
+            r = await client.post(url, json=payload)
+        if r.status_code != 200:
+            log.error("Gemini sim %s: %s", r.status_code, r.text[:300])
+            return {"ok": False, "error": "gen", "reply": "No pude generar la simulación ahora."}
+        data = r.json()
+        parts = (((data.get("candidates") or [{}])[0].get("content") or {}).get("parts") or [])
+        out = None
+        for p in parts:
+            inl = p.get("inlineData") or p.get("inline_data")
+            if inl and inl.get("data"):
+                out = inl
+                break
+        if not out:
+            log.error("Gemini sim sin imagen: %s", json.dumps(data)[:300])
+            return {"ok": False, "error": "noimg", "reply": "No pude generar la simulación ahora."}
+        return {"ok": True, "image_base64": out.get("data"),
+                "mime": out.get("mimeType") or out.get("mime_type") or "image/png"}
+    except Exception as e:
+        log.error("cotizador-simulacion: %s", e)
+        return {"ok": False, "error": "exc", "reply": "No pude generar la simulación ahora."}
 
 
 # ── Seguimiento automático: alerta 🔥 (tocó pago) + recordatorio (sin abrir 48h) ──
