@@ -1445,6 +1445,15 @@ def _send_email(subject: str, html: str, to_addresses: list[str]) -> None:
     # Railway no alcanza el SMTP de Hostinger (IPv6 sin ruta / puerto 465 timeout).
     # Orden de transporte: 1) Odoo (su servidor saliente YA funciona para
     # digitalseg.cl), 2) Resend (HTTPS, si hay API key), 3) SMTP (respaldo).
+    # RESEND_PRIMARY=1 invierte el orden: Resend primero (deliverability + rebotes),
+    # Odoo como respaldo. Requiere RESEND_API_KEY + dominio verificado en Resend.
+    if os.getenv("RESEND_PRIMARY", "").strip() in ("1", "true", "yes") and os.getenv("RESEND_API_KEY", "").strip():
+        ok, info = _send_via_resend(subject, html, to_addresses)
+        if ok:
+            log.info("Email (Resend·primary) enviado a %s: %s", to_addresses, subject)
+            return
+        log.error("Resend primary falló (%s) — intento Odoo", info)
+
     _odoo = globals().get("odoo")
     if _odoo is not None:
         try:
