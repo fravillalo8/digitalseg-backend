@@ -201,11 +201,14 @@ if _dev_mode:
         "http://127.0.0.1:3000",
     ]
 
-# Subdominios internos que llaman al backend (CRM Zentral, página de valor, portal)
+# Subdominios internos que llaman al backend (CRM Zentral/gestión, página de valor, portal)
 for _extra_origin in (
     "https://zentral.digitalseg.cl",
+    "https://gestion.digitalseg.cl",
     "https://cotizacion.digitalseg.cl",
     "https://portal.digitalseg.cl",
+    "https://conta.digitalseg.cl",
+    "https://care.digitalseg.cl",
 ):
     if _extra_origin not in _cors_origins:
         _cors_origins.append(_extra_origin)
