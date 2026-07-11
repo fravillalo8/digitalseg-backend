@@ -1291,11 +1291,12 @@ def _build_cotizacion_html(
 <body style="margin:0;padding:0;background:#071426;font-family:Arial,Helvetica,sans-serif">
 <div style="max-width:600px;margin:0 auto;background:#fff">
 
-  <!-- Header oscuro premium -->
-  <div style="background:#0a1b33;padding:34px 32px;text-align:center;border-bottom:3px solid #7ee097">
-    <p style="margin:0 0 6px;color:#9ed0ff;font-size:11px;letter-spacing:.18em;font-weight:700;text-transform:uppercase">Tu cotización personalizada</p>
-    <h1 style="margin:0;color:#fff;font-size:27px;font-weight:900;letter-spacing:.02em">DIGITAL<span style="color:#7ee097">SEG</span></h1>
-    <p style="margin:8px 0 0;color:#8fa6bd;font-size:12px;letter-spacing:.04em">Seguridad Inteligente · Valle del Aconcagua</p>
+  <!-- Header con el logo original DigitalSeg -->
+  <div style="background:#ffffff;padding:30px 32px 24px;text-align:center;border-bottom:3px solid #3FA83C">
+    <p style="margin:0 0 12px;color:#6b7c8f;font-size:11px;letter-spacing:.18em;font-weight:700;text-transform:uppercase">Tu cotización personalizada</p>
+    <div style="font-family:Arial,Helvetica,sans-serif;font-weight:900;font-size:30px;letter-spacing:1px;line-height:1;color:#3C82C6">DIGITAL<span style="color:#3FA83C">SEG</span></div>
+    <div style="display:inline-block;width:230px;max-width:70%;height:2px;background:#3C82C6;line-height:2px;font-size:0;margin:10px 0 9px">&nbsp;</div>
+    <div style="font-family:Arial,Helvetica,sans-serif;font-size:10.5px;font-weight:700;letter-spacing:2.5px;line-height:1"><span style="color:#3C82C6">SEGURIDAD</span> <span style="color:#3FA83C">INTELIGENTE</span></div>
   </div>
 
   <!-- Saludo + gancho neuroventas -->
@@ -1612,9 +1613,13 @@ def _build_envio_html(nombre: str, page_url: str, pixel_url: str, folio: str = "
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0f1115;padding:28px 12px;">
 <tr><td align="center">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#151922;border-radius:16px;overflow:hidden;border:1px solid #232a36;">
-    <tr><td style="background:linear-gradient(135deg,#0f1115,#1c2430);padding:26px 28px;border-bottom:2px solid #3DAA57;">
-      <div style="color:#3DAA57;font:700 13px/1 Arial,sans-serif;letter-spacing:2px;text-transform:uppercase;">DigitalSeg</div>
-      <div style="color:#eef2f7;font:700 22px/1.3 Arial,sans-serif;margin-top:8px;">{nm}, tu propuesta está lista 🔐</div>
+    <tr><td style="background:#ffffff;padding:24px 28px 20px;text-align:center;border-bottom:3px solid #3FA83C;">
+      <div style="font-family:Arial,Helvetica,sans-serif;font-weight:800;font-size:24px;letter-spacing:1px;line-height:1;color:#3C82C6;">DIGITAL<span style="color:#3FA83C;">SEG</span></div>
+      <div style="display:inline-block;width:190px;max-width:70%;height:2px;background:#3C82C6;line-height:2px;font-size:0;margin:8px 0 7px;">&nbsp;</div>
+      <div style="font-family:Arial,Helvetica,sans-serif;font-size:9.5px;font-weight:700;letter-spacing:2.5px;line-height:1;"><span style="color:#3C82C6;">SEGURIDAD</span> <span style="color:#3FA83C;">INTELIGENTE</span></div>
+    </td></tr>
+    <tr><td style="background:linear-gradient(135deg,#151922,#1c2430);padding:24px 28px;">
+      <div style="color:#eef2f7;font:700 22px/1.3 Arial,sans-serif;">{nm}, tu propuesta está lista 🔐</div>
     </td></tr>
     <tr><td style="padding:26px 28px;color:#c4ccd8;font:400 15px/1.65 Arial,sans-serif;">
       <p style="margin:0 0 14px;">Preparamos algo pensado en tu tranquilidad: una propuesta hecha a tu medida, con tu producto, tu instalación y las formas de pago.</p>
