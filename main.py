@@ -1721,32 +1721,13 @@ async def _selftest_envio(to: str = "fravillalo@gmail.com", c: str = "demo-prueb
         nombre="Francisco", page_url=page_url, pixel_url=pixel_url, folio="PRUEBA-001"
     )
     diag: dict = {"sent_to": dest, "pixel": pixel_url, "page": page_url}
-    _odoo = globals().get("odoo")
-    diag["odoo_present"] = _odoo is not None
-    try:
-        diag["odoo_uid"] = getattr(_odoo, "uid", None)
-    except Exception as e:
-        diag["odoo_uid_err"] = f"{type(e).__name__}: {e}"
-    # 1) intento directo por Odoo (para ver el error real si falla)
-    try:
-        mid = _odoo.send_html_email(
-            "[PRUEBA] Tu propuesta DigitalSeg está lista 🔐",
-            html, [dest],
-            email_from=os.getenv("ODOO_MAIL_FROM", "").strip(),
-        )
-        diag["odoo_send"] = f"ok mail_id={mid}"
-        diag["ok"] = True
-        return diag
-    except Exception as e:
-        diag["odoo_send_err"] = f"{type(e).__name__}: {e}"
-    # 2) despachador normal (Odoo→Resend→SMTP) como respaldo
     try:
         _send_email("[PRUEBA] Tu propuesta DigitalSeg está lista 🔐", html, [dest])
-        diag["fallback"] = "ok"
         diag["ok"] = True
     except Exception as e:
-        diag["fallback_err"] = f"{type(e).__name__}: {e}"
+        log.exception("selftest envio")
         diag["ok"] = False
+        diag["error"] = f"{type(e).__name__}: {e}"
     return diag
 
 

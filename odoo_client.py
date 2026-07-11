@@ -292,7 +292,16 @@ class OdooClient:
         if email_from:
             vals["email_from"] = email_from
         mail_id = self._exec("mail.mail", "create", [vals])
-        self._exec("mail.mail", "send", [[mail_id]])
+        try:
+            self._exec("mail.mail", "send", [[mail_id]])
+        except xmlrpc.client.Fault as e:
+            # Odoo saas-19.2: mail.mail.send() devuelve None y el marshaller XML-RPC
+            # del servidor (allow_none=False) lanza Fault AL SERIALIZAR la respuesta.
+            # El envío YA se ejecutó en el servidor, así que lo tratamos como éxito.
+            if "marshal None" in str(e) or "allow_none" in str(e):
+                pass
+            else:
+                raise
         return mail_id
 
     # ── Calendar events ──────────────────────────────────────────────────────────
