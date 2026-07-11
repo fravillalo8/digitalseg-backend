@@ -1169,6 +1169,46 @@ def _build_cotizacion_html(
         '🛡️ Garantía de 12 meses &nbsp;·&nbsp; 📍 +100 instalaciones en el Aconcagua &nbsp;·&nbsp; 🔧 Técnico certificado'
         '</span></div>'
     )
+
+    # ── Software de gestión (app), adaptado a la marca del producto ──
+    _sku = sku.lower()
+    _no_app = "cerrojo" in _sku
+    if _sku.startswith("kaadas"):
+        app_name = "App KAADAS"
+        app_note = ("La app de KAADAS es estable y directa para lo esencial. Es más "
+                    "simple que TTLock o Tuya —menos personalizable— pero confiable para el día a día.")
+    elif "domus-wifi" in _sku:
+        app_name = "App Tuya Smart"
+        app_note = ("Tuya es una de las plataformas más flexibles del mercado: usuarios, "
+                    "automatizaciones y control total desde el celular.")
+    else:
+        app_name = "App TTLock"
+        app_note = ("TTLock es una de las apps más flexibles y potentes: creas usuarios, "
+                    "generas y revocas códigos, y ves todo el historial. Mucho más versátil que apps más cerradas.")
+    software_block = "" if _no_app else (
+        '<p style="margin:2px 0 10px;font-size:12px;letter-spacing:.05em;color:#7a91a9;text-transform:uppercase;font-weight:700">La controlas desde tu celular</p>'
+        '<div style="background:#0a1b33;border-radius:14px;padding:20px;margin-bottom:22px">'
+        '<div style="background:#0f2036;border:1px solid #1e3350;border-radius:12px;padding:15px 16px;max-width:300px;margin:0 auto 16px">'
+        f'<p style="margin:0 0 10px;color:#7ee097;font-size:12px;font-weight:700">📱 {app_name}</p>'
+        '<p style="margin:0;color:#cfe3f6;font-size:13px;line-height:2.1">'
+        '👤 Usuarios y huellas ilimitadas<br>'
+        '🔑 Códigos temporales que expiran solos<br>'
+        '🕐 Registro de accesos: quién entró y cuándo<br>'
+        '🌐 Abrir a distancia (con Gateway)'
+        '</p></div>'
+        f'<p style="margin:0;color:#cfe3f6;font-size:14px;line-height:1.6">{app_note}</p>'
+        '</div>'
+    )
+
+    # ── Portal DigitalSeg (garantía + manual) ──
+    portal_block = (
+        '<div style="background:#f6f9fc;border:1px solid #dfe8f1;border-radius:12px;padding:18px 20px;margin-bottom:22px">'
+        '<p style="margin:0 0 6px;color:#0a1b33;font-weight:800;font-size:15px">🔐 Incluye acceso al Portal DigitalSeg</p>'
+        '<p style="margin:0;color:#4a5a6a;font-size:14px;line-height:1.6">Al comprar activas tu cuenta: '
+        '<strong>validas tu garantía</strong> de 12 meses y <strong>descargas el manual</strong> de tu '
+        'cerradura cuando lo necesites, todo en un solo lugar.</p>'
+        '</div>'
+    )
     return f"""<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"></head>
 <body style="margin:0;padding:0;background:#071426;font-family:Arial,Helvetica,sans-serif">
 <div style="max-width:600px;margin:0 auto;background:#fff">
@@ -1233,6 +1273,8 @@ def _build_cotizacion_html(
       </table>
     </div>
 
+    {software_block}
+
     <!-- Entrega / urgencia -->
     <div style="background:#eafaf0;border-left:4px solid #7ee097;border-radius:0 8px 8px 0;padding:16px;margin-bottom:20px">
       <p style="margin:0;font-size:14px;color:#0f5a30;line-height:1.55">
@@ -1242,6 +1284,8 @@ def _build_cotizacion_html(
     </div>
 
     {install_block}
+
+    {portal_block}
 
     {payment_block}
 
