@@ -1047,8 +1047,7 @@ def _build_lead_html(c, rec, req, quantity: int, install_label: str,
         return (f'<tr><td style="padding:6px 0;color:#7a91a9;white-space:nowrap;vertical-align:top">{label}</td>'
                 f'<td style="padding:6px 0;color:#0a1b33;font-weight:600">{value}</td></tr>')
 
-    return f"""<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"></head>
+    return f"""<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"></head>
 <body style="margin:0;padding:0;background:#eef2f6;font-family:Arial,Helvetica,sans-serif">
 <div style="max-width:600px;margin:0 auto;background:#fff">
   <div style="background:#0a1b33;padding:22px 28px">
@@ -1140,8 +1139,7 @@ def _build_cotizacion_html(
             '<p style="margin:0;font-size:13px;color:#7a5a00;line-height:1.6">🔧 La instalación profesional es <strong>obligatoria</strong> (garantía 12 meses): <strong>$89.990</strong> madera · <strong>$99.990</strong> reja/fierro.</p>'
             '</div>'
         )
-    return f"""<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"></head>
+    return f"""<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"></head>
 <body style="margin:0;padding:0;background:#071426;font-family:Arial,Helvetica,sans-serif">
 <div style="max-width:600px;margin:0 auto;background:#fff">
 
