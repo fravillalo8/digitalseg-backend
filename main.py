@@ -174,7 +174,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         log.info("Odoo uid=%s | WhatsApp configurado=%s", odoo.uid, wa._configured)
     except Exception as e:
         log.warning("Odoo auth en startup falló (se reintentará por request): %s", e)
+    # Cron de seguimiento automático (alerta 🔥 + recordatorio)
+    seg_task = None
+    if os.getenv("SEGUIMIENTO_ENABLED", "1").strip().lower() in ("1", "true", "yes"):
+        seg_task = asyncio.create_task(_seguimiento_loop())
+        log.info("Seguimiento automático ACTIVO (cada %ss)", os.getenv("SEGUIMIENTO_INTERVAL", "600"))
     yield
+    if seg_task:
+        seg_task.cancel()
 
 
 app = FastAPI(title="DigitalSeg Backend", lifespan=lifespan)
@@ -1860,6 +1867,129 @@ async def soporte_ia(request: Request) -> dict:
     except Exception as e:
         log.error("soporte-ia: %s", e)
         return {"reply": _IA_FALLBACK}
+
+
+# ── Seguimiento automático: alerta 🔥 (tocó pago) + recordatorio (sin abrir 48h) ──
+
+_ALERT_RECIPIENTS = [
+    e.strip() for e in os.getenv(
+        "SEGUIMIENTO_RECIPIENTS", "sebastian.cabrera@digitalseg.cl,contacto@digitalseg.cl"
+    ).split(",") if e.strip()
+]
+_CRM_URL = os.getenv("CRM_URL", "https://zentral.digitalseg.cl")
+# Secreto compartido con las RPC de seguimiento (protege PII de la anon key pública).
+# Mismo valor en el SQL. Se puede override por env en Railway + SQL.
+_SEG_SECRET = os.getenv("SEGUIMIENTO_SECRET", "ds_seg_7Kq2mN9xP4wL8vR3")
+
+
+async def _supa_rpc(name: str, params: dict | None = None) -> httpx.Response:
+    async with httpx.AsyncClient(timeout=12) as client:
+        return await client.post(
+            f"{_DS_SUPA_URL}/rest/v1/rpc/{name}",
+            headers={
+                "apikey": _DS_SUPA_ANON,
+                "Authorization": f"Bearer {_DS_SUPA_ANON}",
+                "Content-Type": "application/json",
+            },
+            json=params or {},
+        )
+
+
+def _build_alerta_html(tipo: str, cliente: str, folio: str, page_url: str) -> str:
+    nm = escape(cliente or "Cliente")
+    if tipo == "hot":
+        head = "🔥 " + nm + " está CALIENTE"
+        body = (
+            "Acaba de <b>tocar WhatsApp o pago</b> en su propuesta. Está decidiendo "
+            "<b>ahora mismo</b> — es el mejor momento para llamarlo y cerrar."
+        )
+        accent = "#EF4444"
+        cta = "Llamar / seguir en el CRM"
+    else:
+        head = "⏰ " + nm + " no abrió su propuesta"
+        body = (
+            "Ya pasaron <b>48 horas</b> desde el envío y aún no la abre. Un mensaje corto "
+            "con valor (no “¿lo pensaste?”) suele reactivar."
+        )
+        accent = "#3DAA57"
+        cta = "Reactivar desde el CRM"
+    return f"""\
+<!doctype html><html lang="es"><body style="margin:0;background:#0f1115;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0f1115;padding:26px 12px;"><tr><td align="center">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:#151922;border-radius:16px;overflow:hidden;border:1px solid #232a36;">
+    <tr><td style="padding:22px 26px;border-bottom:2px solid {accent};">
+      <div style="color:{accent};font:800 13px/1 Arial,sans-serif;letter-spacing:1px;text-transform:uppercase;">DigitalSeg · Seguimiento</div>
+      <div style="color:#eef2f7;font:800 21px/1.3 Arial,sans-serif;margin-top:8px;">{escape(head)}</div>
+    </td></tr>
+    <tr><td style="padding:22px 26px;color:#c4ccd8;font:400 15px/1.6 Arial,sans-serif;">
+      <p style="margin:0 0 16px;">{body}</p>
+      <p style="margin:0 0 20px;font-size:13px;color:#8a94a6;">Propuesta <b style="color:#c4ccd8;">{escape(folio)}</b></p>
+      <table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="border-radius:10px;background:{accent};">
+        <a href="{_CRM_URL}" style="display:inline-block;padding:13px 26px;color:#0f1115;font:800 15px Arial,sans-serif;text-decoration:none;border-radius:10px;">{cta} →</a>
+      </td></tr></table>
+      <p style="margin:18px 0 0;font-size:12px;color:#8a94a6;">Ver la propuesta del cliente: <a href="{page_url}" style="color:{accent};word-break:break-all;">{page_url}</a></p>
+    </td></tr>
+  </table>
+</td></tr></table></body></html>"""
+
+
+async def _run_seguimiento() -> dict:
+    try:
+        r = await _supa_rpc("cotizaciones_seguimiento", {"p_secret": _SEG_SECRET})
+    except Exception as e:
+        return {"error": f"rpc conn: {e}"}
+    if r.status_code != 200:
+        return {"error": f"rpc {r.status_code}: {r.text[:160]}"}
+    rows = r.json() or []
+    hot = 0
+    rem = 0
+    for row in rows:
+        slug = row.get("slug")
+        if not slug:
+            continue
+        data = row.get("data") or {}
+        cliente = ((data.get("client") or {}).get("fullName")) or "Cliente"
+        folio = row.get("folio") or slug
+        page_url = f"{_COT_PAGE_BASE}/?c={slug}"
+        try:
+            if row.get("click_at") and not row.get("alerta_hot_at"):
+                _send_email(
+                    f"🔥 {cliente} está caliente — llámalo ya",
+                    _build_alerta_html("hot", cliente, folio, page_url),
+                    _ALERT_RECIPIENTS,
+                )
+                await _supa_rpc("marcar_seguimiento", {"p_slug": slug, "p_tipo": "hot", "p_secret": _SEG_SECRET})
+                hot += 1
+            elif row.get("enviado_at") and not row.get("recordatorio_at"):
+                _send_email(
+                    f"⏰ Recordatorio: {cliente} no abrió su propuesta",
+                    _build_alerta_html("recordatorio", cliente, folio, page_url),
+                    _ALERT_RECIPIENTS,
+                )
+                await _supa_rpc("marcar_seguimiento", {"p_slug": slug, "p_tipo": "recordatorio", "p_secret": _SEG_SECRET})
+                rem += 1
+        except Exception as e:
+            log.error("Seguimiento %s: %s", slug, e)
+    return {"candidates": len(rows), "hot": hot, "recordatorio": rem}
+
+
+async def _seguimiento_loop() -> None:
+    interval = int(os.getenv("SEGUIMIENTO_INTERVAL", "600") or "600")
+    await asyncio.sleep(30)  # esperar a que arranque todo
+    while True:
+        try:
+            res = await _run_seguimiento()
+            if res.get("hot") or res.get("recordatorio"):
+                log.info("Seguimiento disparado: %s", res)
+        except Exception as e:
+            log.error("Seguimiento loop: %s", e)
+        await asyncio.sleep(interval)
+
+
+@app.get("/api/_run-seguimiento")
+async def _run_seguimiento_ep() -> dict:
+    """Dispara el chequeo de seguimiento manualmente (idempotente: no re-alerta lo ya marcado)."""
+    return await _run_seguimiento()
 
 
 # ── Health ──────────────────────────────────────────────────────────────────────
