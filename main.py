@@ -964,6 +964,7 @@ async def pago_webhook(request: Request) -> dict:
 
     log.info("Pago %s: status=%s | cliente=***%s | ref=%s", payment_id, status, cliente[-3:] if cliente else "?", ext_ref)
 
+    res_conta = None
     if status == "approved":
         # Anti-replay: no repetir efectos secundarios de un pago ya procesado
         if payment_id in _processed_payments:
@@ -979,6 +980,7 @@ async def pago_webhook(request: Request) -> dict:
             log.info("Conta comisión MP: %s", res_conta)
         except Exception as exc:
             log.warning("Conta comisión MP no registrada: %s", exc)
+            res_conta = {"ok": False, "error": str(exc)}
 
         # Odoo: agregar nota de pago confirmado + intentar marcar como ganado
         if lead_id_raw:
@@ -1003,7 +1005,7 @@ async def pago_webhook(request: Request) -> dict:
             except Exception as exc:
                 log.warning("WA pago_confirmado no enviado: %s", exc)
 
-    return {"ok": True, "payment_id": payment_id, "status": status}
+    return {"ok": True, "payment_id": payment_id, "status": status, "conta": res_conta}
 
 
 # ── Email helpers ─────────────────────────────────────────────────────────────
