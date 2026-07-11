@@ -1555,4 +1555,6 @@ async def health() -> dict:
         "odoo":      "connected",
         "whatsapp":  wa._configured,
         "mercadopago": bool(MP_ACCESS_TOKEN),
+        "mp_webhook_secret": bool(os.getenv("MP_WEBHOOK_SECRET", "")),
+        "conta": conta.configured,
     }
