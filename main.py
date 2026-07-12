@@ -1068,6 +1068,19 @@ async def pago_webhook(request: Request) -> dict:
             except Exception as exc:
                 log.warning("WA pago_confirmado no enviado: %s", exc)
 
+        # Aviso al equipo (Sebastián + Francisco + …): nueva COMPRA → coordinar instalación.
+        try:
+            _monto = payment.get("transaction_amount") or 0
+            _producto = metadata.get("producto") or payment.get("description") or "Compra web"
+            _send_email(
+                subject=f"🎉 Nueva COMPRA: {cliente or 'Cliente'} — {_producto}",
+                html=_build_compra_html(cliente, telefono, _producto, _monto, payment_id, ext_ref),
+                to_addresses=_INFORME_RECIPIENTS,
+            )
+            log.info("Aviso de compra enviado al equipo (%s)", _INFORME_RECIPIENTS)
+        except Exception as exc:
+            log.warning("Aviso de compra al equipo no enviado: %s", exc)
+
     return {"ok": True, "payment_id": payment_id, "status": status, "conta": res_conta}
 
 
@@ -1167,6 +1180,52 @@ def _build_lead_html(c, rec, req, quantity: int, install_label: str,
   </div>
   <div style="background:#0a1b33;padding:12px 28px;text-align:center;font-size:11px;color:#6f88a3">
     DigitalSeg · notificación interna de lead
+  </div>
+</div>
+</body></html>"""
+
+
+def _build_compra_html(cliente: str, telefono: str, producto: str, monto,
+                       payment_id: str, ext_ref: str) -> str:
+    """Correo INTERNO para el equipo: nueva COMPRA (pago aprobado) para coordinar
+    la instalación y dar seguimiento. Con botón de WhatsApp directo al cliente."""
+    nombre = escape(str(cliente or "Cliente"))
+    tel    = escape(str(telefono or "—"))
+    prod   = escape(str(producto or "—"))
+    try:
+        monto_fmt = f"${float(monto or 0):,.0f}".replace(",", ".")
+    except Exception:
+        monto_fmt = escape(str(monto))
+    wa_digits = "".join(ch for ch in str(telefono or "") if ch.isdigit())
+    first = nombre.split(" ")[0]
+    wa_link = (f"https://wa.me/{wa_digits}?text=Hola%20{first}%2C%20soy%20de%20DigitalSeg.%20"
+               f"Recibimos%20tu%20pago%20%E2%9C%85%20y%20quiero%20coordinar%20tu%20instalaci%C3%B3n."
+               ) if wa_digits else ""
+    wa_btn = (f'<a href="{wa_link}" style="display:inline-block;background:#25D366;color:#fff;'
+              f'text-decoration:none;padding:12px 26px;border-radius:40px;font-weight:800;font-size:15px">'
+              f'💬 Coordinar instalación con {first}</a>') if wa_link else ""
+    return f"""<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;background:#eef2f6;font-family:Arial,Helvetica,sans-serif">
+<div style="max-width:600px;margin:0 auto;background:#fff">
+  <div style="background:#0a1b33;padding:22px 28px">
+    <p style="margin:0 0 3px;color:#7ee097;font-size:11px;letter-spacing:.14em;font-weight:700;text-transform:uppercase">🎉 Nueva compra confirmada</p>
+    <h1 style="margin:0;color:#fff;font-size:22px;font-weight:900">{nombre}</h1>
+    <p style="margin:4px 0 0;color:#8fa6bd;font-size:12px">Pago aprobado — a coordinar la instalación</p>
+  </div>
+  <div style="padding:24px 28px">
+    <div style="text-align:center;margin:0 0 22px">{wa_btn}</div>
+    <table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:20px">
+      <tr><td style="padding:6px 0;color:#7a91a9">Producto</td><td style="padding:6px 0;color:#0a1b33;font-weight:600">{prod}</td></tr>
+      <tr><td style="padding:6px 0;color:#7a91a9">Monto pagado</td><td style="padding:6px 0;color:#0a1b33;font-weight:800">{monto_fmt}</td></tr>
+      <tr><td style="padding:6px 0;color:#7a91a9">WhatsApp</td><td style="padding:6px 0;color:#0a1b33;font-weight:600">{tel}</td></tr>
+      <tr><td style="padding:6px 0;color:#7a91a9">Pago</td><td style="padding:6px 0;color:#7a91a9;font-size:12px">{escape(str(payment_id))} · ref {escape(str(ext_ref or '—'))}</td></tr>
+    </table>
+    <div style="background:#f6f9fc;border:1px solid #dfe8f1;border-radius:10px;padding:14px 16px;font-size:13px">
+      <a href="{_CRM_URL}" style="color:#3f7fc4;font-weight:700">Ver en el CRM →</a>
+    </div>
+  </div>
+  <div style="background:#0a1b33;padding:12px 28px;text-align:center;font-size:11px;color:#6f88a3">
+    DigitalSeg · notificación interna de compra
   </div>
 </div>
 </body></html>"""
@@ -1535,7 +1594,12 @@ def _send_email(subject: str, html: str, to_addresses: list[str]) -> None:
 
 # ── POST /api/informe-seguridad ───────────────────────────────────────────────
 
-_INFORME_RECIPIENTS = ["sebastian.cabrera@digitalseg.cl", "contacto@digitalseg.cl"]
+_INFORME_RECIPIENTS = [
+    "sebastian.cabrera@digitalseg.cl",
+    "francisco.villalobos@digitalseg.cl",
+    "contacto@digitalseg.cl",
+    "fravillalo@gmail.com",
+]
 
 @app.post("/api/informe-seguridad")
 async def informe_seguridad(req: InformeSeguridad, request: Request) -> dict:
