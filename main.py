@@ -1511,7 +1511,13 @@ class _SMTP_SSL_IPv4(smtplib.SMTP_SSL):
 
 
 def _resend_from() -> str:
-    return os.getenv("RESEND_FROM", "").strip() or "DigitalSeg · Sebastián Cabrera <notificaciones@digitalseg.cl>"
+    return os.getenv("RESEND_FROM", "").strip() or "Sebastián Cabrera · DigitalSeg <notificaciones@digitalseg.cl>"
+
+
+def _resend_reply_to() -> str:
+    # Que al RESPONDER el correo llegue directo a Sebastián (más personal), aunque
+    # el envío salga del dominio verificado (notificaciones@) por deliverability.
+    return os.getenv("RESEND_REPLY_TO", "").strip() or "Sebastián Cabrera <sebastian.cabrera@digitalseg.cl>"
 
 
 def _send_via_resend(subject: str, html: str, to_addresses: list[str]) -> tuple[bool, str]:
@@ -1523,7 +1529,8 @@ def _send_via_resend(subject: str, html: str, to_addresses: list[str]) -> tuple[
         r = httpx.post(
             "https://api.resend.com/emails",
             headers={"Authorization": f"Bearer {api_key}"},
-            json={"from": _resend_from(), "to": to_addresses, "subject": subject, "html": html},
+            json={"from": _resend_from(), "reply_to": _resend_reply_to(),
+                  "to": to_addresses, "subject": subject, "html": html},
             timeout=20,
         )
         if r.status_code < 300:
