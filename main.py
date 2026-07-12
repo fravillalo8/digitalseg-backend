@@ -9,6 +9,9 @@ import hashlib
 import smtplib
 import socket
 import ssl
+import re
+import secrets
+import unicodedata
 from html import escape
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -245,6 +248,87 @@ _PIXEL_GIF = bytes.fromhex(
     "47494638396101000100800000000000ffffff21f90401000000002c00000000010001000002024401003b"
 )
 
+# ── Cotización de valor desde el LANDING (desacople de Odoo) ─────────────────────
+# Secreto de servidor que la RPC cotizacion_landing_publicar exige (patrón p_secret).
+# Debe coincidir con el hardcode del SQL (_setup/cotizacion_landing.sql). NO va al
+# navegador: sólo este backend lo conoce. Sobrescribible por env en Railway.
+_COT_LANDING_SECRET = os.getenv("COT_LANDING_SECRET", "ds_web_cot_landing_2026_x7Kq")
+# Odoo apagado por defecto: el cotizador ya NO depende de Odoo. Poner USE_ODOO=1
+# sólo si se quiere seguir espejando el contacto/lead en Odoo (best-effort).
+_USE_ODOO = os.getenv("USE_ODOO", "").strip() in ("1", "true", "yes")
+
+# Instalación (obligatoria, parte de la garantía) → línea de la cotización de valor.
+_LANDING_INSTALL = {
+    "madera": (89990, "Instalación profesional · puerta de madera"),
+    "reja":   (99990, "Instalación profesional · reja / fierro"),
+}
+# Espacio del cotizador → "modo" del teléfono-demo de la página de valor.
+_SECTOR_MODE_BY_SPACE = {
+    "casa": "home", "departamento": "home", "airbnb": "home",
+    "parcela": "home", "cajon": "home",
+    "oficina": "oficina", "local": "retail", "bodega": "bodega",
+}
+
+
+def _clp(n) -> str:
+    """Formatea a pesos chilenos con el mismo look que el CRM: $409.980."""
+    return "$" + f"{int(round(n or 0)):,}".replace(",", ".")
+
+
+def _safe_text(s, limit: int = 140) -> str:
+    """Anti-XSS defensivo: el CRM pinta `cliente` SIN escapar (app.html línea ~2149),
+    y este valor viene de un formulario público. Quitamos < > " y caracteres de
+    control para que no pueda inyectar HTML/atributos en el CRM ni romper la /q."""
+    s = str(s or "")
+    s = s.replace("<", "").replace(">", "").replace('"', "")
+    s = "".join(ch for ch in s if ord(ch) >= 32)
+    return " ".join(s.split())[:limit]
+
+
+def _cot_slugify(s: str) -> str:
+    """Slug estable sin acentos (mismo criterio que cotSlugify del CRM)."""
+    s = (s or "").strip().lower()
+    s = "".join(ch for ch in unicodedata.normalize("NFD", s)
+                if unicodedata.category(ch) != "Mn")
+    s = re.sub(r"[^a-z0-9]+", "-", s)
+    return s.strip("-")
+
+
+def _map_sector_modes(space: Optional[str]) -> list[str]:
+    return [_SECTOR_MODE_BY_SPACE.get((space or "").lower(), "home")]
+
+
+def _build_landing_cot_data(c, rec, req, quantity: int, folio: str, slug: str,
+                            emission: str, vence: str) -> tuple[dict, int]:
+    """Mapea el payload del cotizador → el objeto `data` EXACTO que consume la
+    página /q/ y que publica el CRM (publicarCotizacion). Devuelve (data, listPrice)."""
+    install_price, install_label = _LANDING_INSTALL.get((req.instalacion or "").lower(), (0, ""))
+    items = [{
+        "name": f"{rec.brand} {rec.name}".strip(),
+        "desc": "", "benefit": "",
+        "qty": quantity, "price": int(round(rec.price)),
+    }]
+    if install_price:
+        items.append({
+            "name": install_label, "desc": "", "benefit": "",
+            "qty": 1, "price": install_price,
+        })
+    data = {
+        "quote": {"number": folio, "slug": slug,
+                  "emissionDate": emission, "expiryDate": vence, "estado": "enviada"},
+        "client": {"fullName": _safe_text(c.nombre), "rut": c.rut or "",
+                   "razonSocial": _safe_text(c.razonSocial or "")},
+        "salesperson": {"name": "Sebastián Cabrera",
+                        "phoneDisplay": "+56 9 4688 0196", "whatsapp": "56946880196"},
+        "items": items,
+        "pago": {"contadoDiscountPct": 5, "cuotasCount": 3,
+                 "cuotasOptions": [3, 6], "facturaDisponible": True},
+        "sectors": {"modes": _map_sector_modes(req.space)},
+    }
+    list_price = sum(int(it["price"]) * int(it["qty"] or 1) for it in items)
+    return data, list_price
+
+
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
     response = await call_next(request)
@@ -258,6 +342,10 @@ async def security_headers(request: Request, call_next):
 
 @app.post("/api/leads", response_model=LeadResponse)
 async def create_lead(payload: LeadPayload, request: Request) -> LeadResponse:
+    """Desacoplado de Odoo. El cotizador del landing genera la MISMA cotización de
+    valor que el CRM (cotizacion.digitalseg.cl/q/?c=<slug>), registra el lead en el
+    CRM (vista Cotizaciones + tarjeta en el Pipeline) vía RPC security-definer, y
+    manda al cliente ESE link por correo (Resend). Odoo queda opcional (USE_ODOO)."""
     _check_rate(request)
     c   = payload.customer
     rec = payload.recommendation
@@ -266,192 +354,125 @@ async def create_lead(payload: LeadPayload, request: Request) -> LeadResponse:
     phone    = c.telefono
     quantity = int(c.cantidad) if c.cantidad.isdigit() else 1
 
-    log.info("Lead: %s | SKU: %s | formal: %s", c.nombre, rec.sku, c.cotizacionFormal)
+    log.info("Lead (web→CRM): %s | SKU: %s | formal: %s", c.nombre, rec.sku, c.cotizacionFormal)
 
-    # 1. Contacto en Odoo
+    # 1. Cotización de valor (mismo `data` que publica el CRM) + folio/slug propios.
+    emission = datetime.utcnow().strftime("%Y-%m-%d")
+    vence    = (datetime.utcnow() + timedelta(days=30)).strftime("%Y-%m-%d")
+    folio    = "WEB-" + datetime.utcnow().strftime("%y%m%d") + "-" + secrets.token_hex(2).upper()
+    slug     = (_cot_slugify(c.nombre) or "cliente") + "-" + secrets.token_hex(8)
+    data, list_price = _build_landing_cot_data(c, rec, req, quantity, folio, slug, emission, vence)
+
+    page_url  = f"{_COT_PAGE_BASE}/?c={slug}"
+    pixel_url = f"{_PUBLIC_BASE}/t/o.gif?c={slug}"
+
+    # 2. Publicar en cotizaciones_pub + registrar el lead en el CRM (RPC definer).
+    published = False
     try:
-        partner_id = odoo.find_or_create_partner(
-            name=c.nombre,
-            phone=phone,
-            city=c.ciudad,
-            company_name=c.razonSocial,
-            vat=c.rut,
-            email=c.email,
-        )
-    except Exception as e:
-        log.error("Error creando contacto en Odoo: %s", e)
-        raise HTTPException(status_code=502, detail="No pudimos registrar tu contacto. Intenta más tarde.")
-
-    # 2. Oportunidad CRM
-    try:
-        lead_id = odoo.create_lead(
-            partner_id=partner_id,
-            phone=phone,
-            product_name=f"{rec.brand} {rec.name}",
-            sku=rec.sku,
-            price=rec.price,
-            requirements=req.model_dump(),
-            source_label=payload.source,
-            quantity=quantity,
-            needs_gateway=rec.needsGateway,
-            email=c.email,
-        )
-    except Exception as e:
-        log.error("Error creando oportunidad en Odoo: %s", e)
-        raise HTTPException(status_code=502, detail="No pudimos registrar tu solicitud. Intenta más tarde.")
-
-    # Instalación elegida por el cliente (obligatoria — parte de la garantía)
-    _INSTALL = {
-        "madera": (89990, "Instalación profesional — puerta de madera"),
-        "reja":   (99990, "Instalación profesional — reja / fierro"),
-    }
-    install_price, install_label = _INSTALL.get((req.instalacion or "").lower(), (0, ""))
-
-    # 3. Cotización automática si hay email (con stock check y fecha de entrega)
-    sale_order_id = None
-    email_sent = False
-    if c.email:
-        stock_qty = 0.0
-        try:
-            stock_qty = odoo.check_stock(rec.sku)
-        except Exception as e:
-            log.warning("No se pudo verificar stock de '%s': %s", rec.sku, e)
-
-        in_stock      = stock_qty >= 1
-        delivery_days = 2 if in_stock else 7   # sin stock: ~1 semana
-        commit_dt     = (datetime.utcnow() + timedelta(days=delivery_days)).strftime("%Y-%m-%d 12:00:00")
-        _stock_line   = (
-            f"Stock disponible: {stock_qty:.0f} unidades — entrega/instalación estimada: {delivery_days} días hábiles."
-            if in_stock else
-            "Producto SIN STOCK por ahora — lo conseguimos a pedido. Entrega/instalación estimada en "
-            "aproximadamente 1 semana (7 días hábiles). Te confirmamos la fecha exacta al coordinar."
-        )
-        if install_price:
-            _install_line = (
-                f"INSTALACIÓN INCLUIDA: {install_label} (${install_price:,.0f}). ".replace(",", ".")
-                + "La instalación profesional es obligatoria, parte de la garantía de 12 meses."
-            )
+        r = await _supa_rpc("cotizacion_landing_publicar", {
+            "p_secret":       _COT_LANDING_SECRET,
+            "p_slug":         slug,
+            "p_folio":        folio,
+            "p_data":         data,
+            "p_cliente":      _safe_text(c.nombre),
+            "p_monto":        _clp(list_price),
+            "p_fecha":        emission,
+            "p_vence":        vence,
+            "p_estado":       "enviada",
+            "p_telefono":     phone or "",
+            "p_email":        c.email or "",
+            "p_add_pipeline": True,
+        })
+        if r.status_code == 200:
+            published = True
+            log.info("Cotización %s publicada + lead en CRM (slug=%s)", folio, slug)
         else:
-            _install_line = (
-                "INSTALACIÓN: la instalación profesional es OBLIGATORIA (parte de la garantía de 12 meses): "
-                "$89.990 en puerta de madera, $99.990 en reja/fierro. DigitalSeg no vende cerraduras sin instalación."
-            )
-        stock_note    = _stock_line + "\n\n" + _install_line
-        log.info("Stock '%s': %.0f uds | entrega: %d días | commit: %s", rec.sku, stock_qty, delivery_days, commit_dt)
+            log.error("RPC cotizacion_landing_publicar %s: %s", r.status_code, r.text[:200])
+    except Exception as e:
+        log.error("RPC cotizacion_landing_publicar falló: %s", e)
 
-        product_id = odoo.find_product(rec.sku)
-        if not product_id:
-            log.warning("SKU '%s' no existe en Odoo — cotización sin producto vinculado", rec.sku)
+    # 3. Odoo: OPCIONAL / best-effort (OFF por defecto). Nada bloquea si falla.
+    #    Sólo espeja contacto + oportunidad; ya NO crea sale_order ni manda el PDF.
+    partner_id = None
+    lead_id = None
+    sale_order_id = None
+    if _USE_ODOO:
         try:
-            sale_order_id = odoo.create_sale_order(
-                partner_id=partner_id,
-                product_id=product_id or 1,
-                product_name=f"{rec.brand} {rec.name}",
-                price=rec.price,
-                quantity=quantity,
-                commitment_date=commit_dt,
-                note=stock_note,
-                install_price=install_price,
-                install_label=install_label,
-            )
-            log.info("Sale order id=%s creada", sale_order_id)
-        except Exception as e:
-            log.error("Error creando cotización: %s", e)
-
-        if sale_order_id:
-            try:
-                html = _build_cotizacion_html(
-                    nombre=c.nombre,
-                    producto=f"{rec.brand} {rec.name}",
-                    sku=rec.sku,
-                    price=rec.price,
-                    quantity=quantity,
-                    in_stock=in_stock,
-                    delivery_days=delivery_days,
-                    odoo_url=odoo.sale_url(sale_order_id),
-                    install_price=install_price,
-                    install_label=install_label,
-                )
-                _send_email(
-                    subject=f"Tu cotización DigitalSeg — {rec.brand} {rec.name}",
-                    html=html,
-                    to_addresses=[c.email],
-                )
-                lead_html = _build_lead_html(
-                    c, rec, req, quantity, install_label, install_price,
-                    lead_url=odoo.lead_url(lead_id),
-                    sale_url=odoo.sale_url(sale_order_id),
-                    source=payload.source,
-                )
-                _send_email(
-                    subject=f"🔔 Nuevo lead: {c.nombre} — {rec.brand} {rec.name} × {quantity}",
-                    html=lead_html,
-                    to_addresses=_INFORME_RECIPIENTS,
-                )
-                email_sent = True
-                log.info("Email cotización enviado al cliente %s y resumen de lead al equipo", c.email)
-            except Exception as e:
-                log.error("Error enviando email de cotización: %s", e)
-
-            # Enviar la cotización OFICIAL de Odoo (presupuesto formal) al cliente
-            try:
-                if odoo.send_quotation_email(sale_order_id):
-                    log.info("Cotización oficial de Odoo enviada al cliente %s", c.email)
-                else:
-                    log.warning("No se encontró plantilla de presupuesto en Odoo — presupuesto oficial no enviado")
-            except Exception as e:
-                log.error("Error enviando cotización oficial de Odoo: %s", e)
-
-    elif c.cotizacionFormal:
-        product_id = odoo.find_product(rec.sku)
-        if not product_id:
-            log.warning("SKU '%s' no existe en Odoo — cotización sin producto vinculado", rec.sku)
-        try:
-            sale_order_id = odoo.create_sale_order(
-                partner_id=partner_id,
-                product_id=product_id or 1,
-                product_name=f"{rec.brand} {rec.name}",
-                price=rec.price,
-                quantity=quantity,
-                install_price=install_price,
-                install_label=install_label,
+            partner_id = odoo.find_or_create_partner(
+                name=c.nombre, phone=phone, city=c.ciudad,
+                company_name=c.razonSocial, vat=c.rut, email=c.email,
             )
         except Exception as e:
-            log.error("Error creando cotización: %s", e)
+            log.warning("Odoo partner (no bloquea): %s", e)
+        try:
+            lead_id = odoo.create_lead(
+                partner_id=partner_id or 0, phone=phone,
+                product_name=f"{rec.brand} {rec.name}", sku=rec.sku, price=rec.price,
+                requirements=req.model_dump(), source_label=payload.source,
+                quantity=quantity, needs_gateway=rec.needsGateway, email=c.email,
+            )
+        except Exception as e:
+            log.warning("Odoo lead (no bloquea): %s", e)
 
-    # 4. WhatsApp: confirmar solicitud recibida al cliente
+    # 4. Correo al CLIENTE: la PÁGINA DE VALOR (neuroventas) + pixel de apertura.
+    #    (No el PDF de Odoo.) Sólo si hay email y la cotización quedó publicada.
+    if c.email and published:
+        try:
+            html = _build_envio_html(nombre=c.nombre, page_url=page_url, pixel_url=pixel_url, folio=folio)
+            _send_email(
+                subject="Tu propuesta DigitalSeg está lista 🔐",
+                html=html,
+                to_addresses=[c.email],
+            )
+            log.info("Propuesta (página de valor) enviada al cliente %s", c.email)
+        except Exception as e:
+            log.error("Error enviando la propuesta al cliente: %s", e)
+
+    # 5. Notificación interna al EQUIPO (siempre, aunque la RPC falle → no perder lead).
+    install_price, install_label = _LANDING_INSTALL.get((req.instalacion or "").lower(), (0, ""))
+    try:
+        team_html = _build_lead_html(
+            c, rec, req, quantity, install_label, install_price,
+            lead_url=_CRM_URL,
+            sale_url=(page_url if published else ""),
+            source=payload.source,
+        )
+        _send_email(
+            subject=f"🔔 Nuevo lead web: {c.nombre} — {rec.brand} {rec.name} × {quantity}",
+            html=team_html,
+            to_addresses=_INFORME_RECIPIENTS,
+        )
+    except Exception as e:
+        log.error("Error enviando la notificación al equipo: %s", e)
+
+    # 6. WhatsApp best-effort (no bloquea).
     try:
         wa.solicitud_recibida(
-            to=phone,
-            nombre=c.nombre,
-            producto=f"{rec.brand} {rec.name}",
-            puerta=req.doorType,
-            ciudad=c.ciudad or "",
+            to=phone, nombre=c.nombre,
+            producto=f"{rec.brand} {rec.name}", puerta=req.doorType, ciudad=c.ciudad or "",
         )
     except Exception as e:
-        log.warning("WhatsApp no enviado (no bloquea): %s", e)
-
-    # 5. WhatsApp: notificar a ventas (Sebastián) del nuevo lead
+        log.warning("WhatsApp cliente no enviado (no bloquea): %s", e)
     try:
         wa.notificar_lead_nuevo(
-            nombre=c.nombre,
-            telefono=phone,
-            ciudad=c.ciudad or "",
-            producto=f"{rec.brand} {rec.name}",
-            precio=rec.price,
-            odoo_url=odoo.lead_url(lead_id),
+            nombre=c.nombre, telefono=phone, ciudad=c.ciudad or "",
+            producto=f"{rec.brand} {rec.name}", precio=rec.price, odoo_url=_CRM_URL,
         )
     except Exception as e:
         log.warning("Notificación ventas no enviada (no bloquea): %s", e)
 
+    msg = ("Cotización publicada y lead registrado en el CRM" if published
+           else "No pudimos generar la propuesta online; el equipo fue notificado y te contactará.")
     return LeadResponse(
-        ok=True,
+        ok=published,
         partner_id=partner_id,
         lead_id=lead_id,
         sale_order_id=sale_order_id,
-        odoo_lead_url=odoo.lead_url(lead_id),
-        odoo_sale_url=odoo.sale_url(sale_order_id) if sale_order_id else None,
-        message="Lead creado correctamente",
+        odoo_lead_url=_CRM_URL,
+        odoo_sale_url=(page_url if published else None),
+        slug=(slug if published else None),
+        cotizacion_url=(page_url if published else None),
+        message=msg,
     )
 
 
@@ -1140,8 +1161,8 @@ def _build_lead_html(c, rec, req, quantity: int, install_label: str,
     </table>
 
     <div style="background:#f6f9fc;border:1px solid #dfe8f1;border-radius:10px;padding:14px 16px;font-size:13px">
-      <a href="{lead_url}" style="color:#3f7fc4;font-weight:700">Ver lead en Odoo →</a>
-      {'&nbsp;·&nbsp; <a href="' + sale_url + '" style="color:#3f7fc4;font-weight:700">Ver cotización →</a>' if sale_url else ''}
+      <a href="{lead_url}" style="color:#3f7fc4;font-weight:700">Ver lead en el CRM →</a>
+      {'&nbsp;·&nbsp; <a href="' + sale_url + '" style="color:#3f7fc4;font-weight:700">Ver propuesta del cliente →</a>' if sale_url else ''}
     </div>
   </div>
   <div style="background:#0a1b33;padding:12px 28px;text-align:center;font-size:11px;color:#6f88a3">

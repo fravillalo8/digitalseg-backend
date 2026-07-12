@@ -72,6 +72,8 @@ class LeadResponse(BaseModel):
     sale_order_id: Optional[int] = None
     odoo_lead_url: Optional[str] = None
     odoo_sale_url: Optional[str] = None
+    slug: Optional[str] = None            # slug de la cotización de valor publicada
+    cotizacion_url: Optional[str] = None  # https://cotizacion.digitalseg.cl/q/?c=<slug>
     message: str
 
 
