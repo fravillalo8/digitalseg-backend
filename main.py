@@ -1878,6 +1878,101 @@ async def soporte_ia(request: Request) -> dict:
         return {"reply": _IA_FALLBACK}
 
 
+# ── IA: sugerir el TITULAR (neuroventas) de la cotización de valor ──
+_titular_rate: dict = defaultdict(list)
+
+_TITULAR_SYSTEM = """Eres copywriter de neuroventas (método Jürgen Klaric) de DigitalSeg, que vende e instala CERRADURAS INTELIGENTES en el Valle del Aconcagua, Chile. Escribes el TITULAR de una propuesta personalizada que verá el cliente.
+
+Vendes la SOLUCIÓN y la EMOCIÓN, no la ficha técnica: seguridad, tranquilidad, control, dejar de depender de una llave, proteger a la familia, estatus. Le hablas al cerebro reptil (miedo a perder, deseo de control y protección de los tuyos).
+
+REGLAS:
+- Español de Chile, tono cálido y cercano, tratando de "tú".
+- Usa el PRIMER NOMBRE del cliente.
+- h1 (titular): 1 sola frase corta y potente, emocional, sobre el bienestar/seguridad que gana. NO menciones precio ni specs técnicas.
+- lead (bajada): 1-2 frases que refuercen la emoción y bajen la fricción (hecho a su medida, con calma, sin compromiso).
+- Nada de clichés vacíos ni exceso de signos. Concreto, humano, creíble.
+
+Ejemplo de estilo:
+h1: "Guido, tu casa está a una decisión de no depender nunca más de una llave."
+lead: "Preparamos esta propuesta pensando en tu tranquilidad y la de los tuyos. Mírala con calma, sin compromiso."
+
+Responde SOLO con JSON válido, sin texto extra ni ```:
+{"h1":"<titular>","lead":"<bajada>"}"""
+
+
+@app.post("/api/cotizacion/titular")
+async def cotizacion_titular(request: Request) -> dict:
+    ip = (request.client.host if request.client else "?") or "?"
+    now = datetime.now().timestamp()
+    _titular_rate[ip] = [t for t in _titular_rate[ip] if now - t < 600]
+    if len(_titular_rate[ip]) >= 15:
+        return {"ok": False, "error": "rate"}
+    _titular_rate[ip].append(now)
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON inválido")
+    cliente = str(body.get("cliente") or "").strip()[:80]
+    rubro = str(body.get("rubro") or "").strip()[:60]
+    prods = body.get("productos") or []
+    if isinstance(prods, list):
+        prods = ", ".join(str(p).strip() for p in prods if str(p).strip())[:300]
+    else:
+        prods = str(prods)[:300]
+    if not cliente:
+        return {"ok": False, "error": "sin_cliente"}
+
+    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        return {"ok": False, "error": "sin_ia"}
+    user_msg = (
+        f"Cliente: {cliente}\n"
+        f"Rubro / uso: {rubro or 'hogar / familia'}\n"
+        f"Productos de la propuesta: {prods or 'cerradura inteligente'}\n\n"
+        "Escribe el titular (h1) y la bajada (lead) para su propuesta."
+    )
+    payload = {
+        "model": os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
+        "max_tokens": 300,
+        "system": _TITULAR_SYSTEM,
+        "messages": [{"role": "user", "content": user_msg}],
+    }
+    try:
+        async with httpx.AsyncClient(timeout=25) as client:
+            r = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "content-type": "application/json",
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                },
+                json=payload,
+            )
+        if r.status_code != 200:
+            log.error("Anthropic titular %s: %s", r.status_code, r.text[:200])
+            return {"ok": False, "error": "ia"}
+        data = r.json()
+        text = (data.get("content") or [{}])[0].get("text") or ""
+        a, b = text.find("{"), text.rfind("}")
+        obj = None
+        if a >= 0 and b > a:
+            try:
+                obj = json.loads(text[a:b + 1])
+            except Exception:
+                obj = None
+        if not isinstance(obj, dict) or not str(obj.get("h1") or "").strip():
+            return {"ok": False, "error": "parse"}
+        return {
+            "ok": True,
+            "h1": str(obj.get("h1") or "").strip()[:240],
+            "lead": str(obj.get("lead") or "").strip()[:400],
+        }
+    except Exception as e:
+        log.error("cotizacion-titular: %s", e)
+        return {"ok": False, "error": "ia"}
+
+
 # ── Cotizador con IA de visión: analiza foto de puerta/cerradura y recomienda ──
 _vision_rate: dict = defaultdict(list)
 
