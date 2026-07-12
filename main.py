@@ -2334,6 +2334,80 @@ async def cotizador_enviar_correo(request: Request) -> dict:
         return {"ok": False, "error": "send", "reply": "No pude enviar el correo ahora. Prueba por WhatsApp."}
 
 
+# ── Export de Odoo: historia de ventas + compras/ingreso de stock + rotación ──
+@app.get("/api/_odoo-export")
+async def odoo_export(secret: str = "", limit: int = 3000) -> dict:
+    if (secret or "").strip() != _SEG_SECRET:
+        raise HTTPException(status_code=403, detail="no autorizado")
+    out: dict = {"ok": True, "errores": {}}
+
+    def q(model, domain, fields, extra=None):
+        try:
+            kw = {"fields": fields, "limit": limit}
+            if extra:
+                kw.update(extra)
+            return odoo._exec(model, "search_read", [domain], kw)
+        except Exception as e:
+            out["errores"][model + "|" + ",".join(fields)] = str(e)[:180]
+            return []
+
+    def pname(pid):
+        return pid[1] if isinstance(pid, (list, tuple)) and len(pid) > 1 else (str(pid) if pid else "")
+
+    # 1) Productos: stock actual + costo (Odoo autoritativo)
+    prods = q("product.product", [], ["name", "qty_available", "standard_price", "list_price", "default_code"], {"order": "name"})
+    # 2) Compras (INGRESO de stock): cuándo + cuánto + costo. Probamos date en la línea; si falla, se ve en errores.
+    pol = q("purchase.order.line", [], ["product_id", "product_qty", "qty_received", "price_unit", "date_planned"])
+    pos = q("purchase.order", [], ["name", "date_order", "amount_total", "state", "partner_id"], {"order": "date_order desc"})
+    # 3) Ventas por producto (SALIDA de stock)
+    sol = q("sale.order.line", [], ["product_id", "product_uom_qty", "qty_delivered", "price_subtotal"])
+    # 4) Órdenes de venta (historia + fechas + montos)
+    so = q("sale.order", [], ["name", "date_order", "amount_total", "state", "partner_id"], {"order": "date_order desc"})
+
+    # ── Agregado por producto para ROTACIÓN ──
+    def blank(nm):
+        return {"producto": nm, "stock_actual": 0, "costo": 0, "precio": 0,
+                "comprado_qty": 0, "recibido_qty": 0, "comprado_1ra": None, "comprado_ult": None,
+                "vendido_qty": 0, "entregado_qty": 0}
+    agg: dict = {}
+    for p in prods:
+        nm = p.get("name", "")
+        a = agg.setdefault(nm, blank(nm))
+        a["stock_actual"] = p.get("qty_available", 0)
+        a["costo"] = p.get("standard_price", 0)
+        a["precio"] = p.get("list_price", 0)
+    for l in pol:
+        nm = pname(l.get("product_id"))
+        if not nm:
+            continue
+        a = agg.setdefault(nm, blank(nm))
+        a["comprado_qty"] += l.get("product_qty", 0) or 0
+        a["recibido_qty"] += l.get("qty_received", 0) or 0
+        d = l.get("date_planned")
+        if d:
+            if not a["comprado_1ra"] or d < a["comprado_1ra"]:
+                a["comprado_1ra"] = d
+            if not a["comprado_ult"] or d > a["comprado_ult"]:
+                a["comprado_ult"] = d
+    for l in sol:
+        nm = pname(l.get("product_id"))
+        if not nm:
+            continue
+        a = agg.setdefault(nm, blank(nm))
+        a["vendido_qty"] += l.get("product_uom_qty", 0) or 0
+        a["entregado_qty"] += l.get("qty_delivered", 0) or 0
+
+    rot = sorted(agg.values(), key=lambda x: -(x.get("vendido_qty") or 0))
+    out.update({
+        "conteos": {"productos": len(prods), "compras_lineas": len(pol), "compras_ordenes": len(pos),
+                    "ventas_lineas": len(sol), "ventas_ordenes": len(so)},
+        "ventas_ordenes": so[:400],
+        "compras_ordenes": pos[:400],
+        "rotacion": rot,
+    })
+    return out
+
+
 # ── Seguimiento automático: alerta 🔥 (tocó pago) + recordatorio (sin abrir 48h) ──
 
 _ALERT_RECIPIENTS = [
