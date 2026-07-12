@@ -2192,15 +2192,18 @@ async def cotizador_simulacion(request: Request) -> dict:
         prompt = prompt_override
     elif ref_part:
         prompt = (
-            "La PRIMERA imagen es la puerta de un cliente. La SEGUNDA imagen es la cerradura "
-            f"inteligente REAL que le vamos a instalar ({desc}). Reemplaza la cerradura o manilla "
-            "actual de la puerta por ESA cerradura de la segunda imagen, fotorrealista y bien "
-            "integrada. Respeta su diseño, color y forma REALES; no inventes otra. Tamaño realista y "
-            "proporcionado (ocupa una franja vertical de unos 30 cm junto al canto de apertura); la "
-            "manilla debe verse natural y del largo real, NO exagerada ni colgando. Sombras, reflejos "
-            "y perspectiva coherentes con la luz de la foto. Quita cualquier manilla o cerradura "
-            "antigua. Mantén EXACTAMENTE igual la puerta, su color y vetas, el marco, el muro, la luz "
-            "y el ángulo. Sin texto ni marcas de agua. Devuelve solo la foto editada."
+            "TAREA: montar una cerradura inteligente REAL sobre la puerta del cliente, fotorrealista. "
+            "La PRIMERA imagen es la puerta del cliente. La SEGUNDA imagen es la cerradura ESPECÍFICA "
+            f"de nuestro catálogo que se le instalará ({desc}). "
+            "REGLAS ESTRICTAS: (1) COPIA EXACTAMENTE la cerradura de la SEGUNDA imagen — su misma "
+            "forma, cuerpo negro vertical, panel, teclado y manilla tal como se ven; NO inventes, NO "
+            "rediseñes, NO cambies su forma ni agregues/quites partes: debe ser el MISMO modelo. "
+            "(2) Colócala en el canto de apertura de la puerta de la PRIMERA imagen, a la altura de una "
+            "manija, tamaño realista (~30 cm de alto) y proporción correcta. (3) Quita la manilla o "
+            "cerradura antigua que estorbe. (4) Intégrala con sombras, reflejos y perspectiva "
+            "coherentes con la luz de la foto del cliente. (5) Mantén IDÉNTICO todo lo demás de la "
+            "puerta: color, vetas, marco, muro, luz y ángulo. No agregues texto, logos ni marcas de "
+            "agua. Devuelve SOLO la foto editada."
         )
     else:
         prompt = (
