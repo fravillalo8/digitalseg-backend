@@ -2246,6 +2246,91 @@ async def cotizador_simulacion(request: Request) -> dict:
         return {"ok": False, "error": "exc", "reply": "No pude generar la simulación ahora."}
 
 
+# ── Cotizador: enviar la recomendación de la IA por CORREO ──
+_correo_rate: dict = defaultdict(list)
+
+
+def _build_reco_email(nombre: str, modelo: str, precio: str, material: str, razon: str, modelo_id: str) -> str:
+    nm = escape((nombre or "").split(" ")[0] or "Hola")
+    modelo = escape(modelo or "tu cerradura")
+    precio = escape(precio or "")
+    material = escape(material or "")
+    razon = escape(razon or "")
+    prod_img = ""
+    f = _SIM_IMG.get(modelo_id or "")
+    if f:
+        prod_img = ('<tr><td align="center" style="padding:4px 28px 0">'
+                    '<img src="https://digitalseg.cl/' + f + '" alt="' + modelo + '" '
+                    'style="max-width:210px;width:100%;height:auto;border-radius:12px"></td></tr>')
+    precio_line = ('<div style="color:#3FA83C;font:800 22px/1 Arial,sans-serif;margin:6px 0 0">' + precio + '</div>') if precio else ""
+    razon_line = ('<p style="margin:14px 0 0;color:#c4ccd8;font:400 15px/1.6 Arial,sans-serif">' + razon + '</p>') if razon else ""
+    return f"""\
+<!doctype html><html lang="es"><body style="margin:0;padding:0;background:#0f1115;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0f1115;padding:28px 12px;"><tr><td align="center">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#151922;border-radius:16px;overflow:hidden;border:1px solid #232a36;">
+    <tr><td style="background:#ffffff;padding:24px 28px 20px;text-align:center;border-bottom:3px solid #3FA83C;">
+      <div style="font-family:Arial,Helvetica,sans-serif;font-weight:800;font-size:24px;letter-spacing:1px;line-height:1;color:#3C82C6;">DIGITAL<span style="color:#3FA83C;">SEG</span></div>
+      <div style="display:inline-block;width:190px;max-width:70%;height:2px;background:#3C82C6;line-height:2px;font-size:0;margin:8px 0 7px;">&nbsp;</div>
+      <div style="font-family:Arial,Helvetica,sans-serif;font-size:9.5px;font-weight:700;letter-spacing:2.5px;line-height:1;"><span style="color:#3C82C6;">SEGURIDAD</span> <span style="color:#3FA83C;">INTELIGENTE</span></div>
+    </td></tr>
+    <tr><td style="background:linear-gradient(135deg,#151922,#1c2430);padding:22px 28px 6px;">
+      <div style="color:#9ed0ff;font:700 12px/1 Arial,sans-serif;letter-spacing:.12em;text-transform:uppercase;">Tu recomendación con IA</div>
+      <div style="color:#eef2f7;font:700 21px/1.3 Arial,sans-serif;margin-top:8px;">{nm}, esto calza con tu puerta 🔐</div>
+    </td></tr>
+    {prod_img}
+    <tr><td style="padding:16px 28px 4px;text-align:center;">
+      <div style="color:#eef2f7;font:800 19px/1.2 Arial,sans-serif;">{modelo}</div>
+      {precio_line}
+      {('<div style="color:#8a94a6;font:400 13px/1.5 Arial,sans-serif;margin-top:8px">Para tu puerta: ' + material + '</div>') if material else ''}
+    </td></tr>
+    <tr><td style="padding:0 28px;">{razon_line}
+      <table role="presentation" cellpadding="0" cellspacing="0" style="margin:20px auto 4px;"><tr><td style="border-radius:12px;background:#25D366;">
+        <a href="https://wa.me/56946880196?text=Hola!%20Vi%20mi%20recomendaci%C3%B3n%20por%20correo%20({modelo})%20y%20quiero%20cotizar" style="display:inline-block;padding:14px 30px;color:#fff;font:700 16px Arial,sans-serif;text-decoration:none;border-radius:12px;">💬 Cotizar por WhatsApp →</a>
+      </td></tr></table>
+      <p style="margin:14px 0 0;text-align:center;font-size:13px;"><a href="https://digitalseg.cl/cotizador.html" style="color:#3FA83C;">Ver más opciones y simular en la web →</a></p>
+    </td></tr>
+    <tr><td style="padding:20px 28px 26px;border-top:1px solid #232a36;color:#8a94a6;font:400 13px/1.6 Arial,sans-serif;margin-top:12px;">
+      Te atiende personalmente <b style="color:#c4ccd8;">Sebastián Cabrera</b> · tu asesor de seguridad · WhatsApp <a href="https://wa.me/56946880196" style="color:#3FA83C;">+56 9 4688 0196</a>. Instalamos en el Valle del Aconcagua.
+    </td></tr>
+  </table>
+</td></tr></table></body></html>"""
+
+
+@app.post("/api/cotizador/enviar-correo")
+async def cotizador_enviar_correo(request: Request) -> dict:
+    ip = (request.client.host if request.client else "?") or "?"
+    now = datetime.now().timestamp()
+    _correo_rate[ip] = [t for t in _correo_rate[ip] if now - t < 600]
+    if len(_correo_rate[ip]) >= 10:
+        return {"ok": False, "error": "rate", "reply": "Demasiados envíos seguidos. Espera unos minutos."}
+    _correo_rate[ip].append(now)
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON inválido")
+    email = str(body.get("email") or "").strip()
+    if "@" not in email or "." not in email or len(email) > 120:
+        return {"ok": False, "error": "email", "reply": "Déjanos un correo válido."}
+    html = _build_reco_email(
+        nombre=str(body.get("nombre") or "")[:60],
+        modelo=str(body.get("modelo") or "")[:80],
+        precio=str(body.get("precio") or "")[:30],
+        material=str(body.get("material") or "")[:120],
+        razon=str(body.get("razon") or "")[:400],
+        modelo_id=str(body.get("modelo_id") or "")[:60],
+    )
+    try:
+        _send_email(
+            subject="Tu recomendación DigitalSeg 🔐",
+            html=html,
+            to_addresses=[email],
+        )
+        return {"ok": True}
+    except Exception as e:
+        log.error("cotizador-enviar-correo: %s", e)
+        return {"ok": False, "error": "send", "reply": "No pude enviar el correo ahora. Prueba por WhatsApp."}
+
+
 # ── Seguimiento automático: alerta 🔥 (tocó pago) + recordatorio (sin abrir 48h) ──
 
 _ALERT_RECIPIENTS = [
