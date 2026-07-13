@@ -2661,6 +2661,90 @@ async def _run_seguimiento_ep() -> dict:
     return await _run_seguimiento()
 
 
+# ── Importador de LEADS de Odoo → Pipeline Zentral (migración Odoo→suite) ─────────
+# Lee los leads ABIERTOS (activos, no ganados) de Odoo y los siembra en el kanban
+# del CRM vía la RPC pipeline_import_leads (idempotente por odoo_id). Protegido con
+# X-Admin-Key. Por defecto hace DRY-RUN (lista sin importar); ?confirm=1 importa.
+_ODOO_STAGE_TO_COL = {
+    "new": "Prospecto", "nuevo": "Prospecto", "nueva": "Prospecto",
+    "qualified": "Calificado", "calificado": "Calificado", "calificada": "Calificado",
+    "proposition": "Propuesta", "propuesta": "Propuesta", "quotation": "Propuesta",
+    "cotización": "Propuesta", "cotizacion": "Propuesta",
+    "negotiation": "Negociación", "negociación": "Negociación", "negociacion": "Negociación",
+}
+
+
+def _map_odoo_stage_to_col(stage_name: str) -> str:
+    s = (stage_name or "").strip().lower()
+    for key, col in _ODOO_STAGE_TO_COL.items():
+        if key in s:
+            return col
+    return "Prospecto"
+
+
+@app.get("/api/admin/import-odoo-leads")
+async def import_odoo_leads(
+    confirm: int = 0,
+    limit: int = 500,
+    x_admin_key: Optional[str] = Header(default=None),
+) -> dict:
+    """Trae los leads abiertos (no ganados) de Odoo al pipeline del CRM.
+    DRY-RUN por defecto (lista sin importar); ?confirm=1 los importa (idempotente)."""
+    _require_admin(x_admin_key)
+    # 1) Leer de Odoo: activos (no perdidos) y no ganados (probability < 100).
+    domain = [["active", "=", True], ["probability", "<", 100]]
+    fields = ["id", "name", "contact_name", "partner_name", "email_from",
+              "phone", "mobile", "expected_revenue", "probability",
+              "stage_id", "type", "create_date", "city"]
+    try:
+        rows = odoo._exec("crm.lead", "search_read", [domain],
+                          {"fields": fields,
+                           "limit": max(1, min(int(limit or 500), 1000)),
+                           "order": "create_date desc"})
+    except Exception as e:
+        log.warning("Odoo import-leads falló: %s", e)
+        raise HTTPException(status_code=502, detail=f"No se pudo leer Odoo: {e}")
+
+    leads = []
+    for r in (rows or []):
+        st = r.get("stage_id")
+        stage_name = st[1] if isinstance(st, (list, tuple)) and len(st) > 1 else ""
+        nombre = (r.get("contact_name") or r.get("name") or "Lead").strip()
+        co = (r.get("partner_name") or r.get("phone") or r.get("mobile")
+              or r.get("email_from") or "Odoo")
+        leads.append({
+            "name": _safe_text(nombre, 80),
+            "co": _safe_text(str(co), 80),
+            "val": _clp(r.get("expected_revenue") or 0),
+            "date": str(r.get("create_date") or "")[:10],
+            "col": _map_odoo_stage_to_col(stage_name),
+            "odoo_id": "odoo-" + str(r.get("id")),
+            "vendedor": None,
+            "_stage": stage_name,
+            "_prob": r.get("probability"),
+        })
+
+    if not confirm:
+        # DRY-RUN: sólo muestra qué se importaría, sin tocar el pipeline.
+        by_col: dict = {}
+        for l in leads:
+            by_col[l["col"]] = by_col.get(l["col"], 0) + 1
+        return {"dry_run": True, "encontrados": len(leads),
+                "por_columna": by_col, "leads": leads}
+
+    # 2) Importar al pipeline vía RPC (idempotente por odoo_id).
+    payload = [{k: v for k, v in l.items() if not k.startswith("_")} for l in leads]
+    try:
+        resp = await _supa_rpc("pipeline_import_leads",
+                               {"p_secret": _COT_LANDING_SECRET, "p_leads": payload})
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Supabase: {e}")
+    if resp.status_code >= 300:
+        raise HTTPException(status_code=502,
+                            detail=f"Supabase {resp.status_code}: {resp.text[:200]}")
+    return {"dry_run": False, "encontrados": len(leads), "resultado": resp.json()}
+
+
 # ── Agendamiento de instalación por el cliente (post-pago) ───────────────────────
 # Solo Valle del Aconcagua. 24h si hay stock local, 48h si no (el front decide el
 # mínimo; el server valida cobertura + slot libre).
