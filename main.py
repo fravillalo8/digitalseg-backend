@@ -259,8 +259,8 @@ _USE_ODOO = os.getenv("USE_ODOO", "").strip() in ("1", "true", "yes")
 
 # Instalación (obligatoria, parte de la garantía) → línea de la cotización de valor.
 _LANDING_INSTALL = {
-    "madera": (89990, "Instalación profesional · puerta de madera"),
-    "reja":   (99990, "Instalación profesional · reja / fierro"),
+    "madera": (85000, "Instalación profesional · puerta de madera"),
+    "reja":   (105000, "Instalación profesional · reja / fierro"),
 }
 # Espacio del cotizador → "modo" del teléfono-demo de la página de valor.
 _SECTOR_MODE_BY_SPACE = {
@@ -302,16 +302,22 @@ def _build_landing_cot_data(c, rec, req, quantity: int, folio: str, slug: str,
                             emission: str, vence: str) -> tuple[dict, int]:
     """Mapea el payload del cotizador → el objeto `data` EXACTO que consume la
     página /q/ y que publica el CRM (publicarCotizacion). Devuelve (data, listPrice)."""
-    install_price, install_label = _LANDING_INSTALL.get((req.instalacion or "").lower(), (0, ""))
+    # Instalación SIEMPRE incluida (es requisito de la garantía del fabricante y de
+    # la garantía DigitalSeg de 12 meses). Si el cotizador no manda tipo de puerta,
+    # se asume 'madera' (lo más común); el vendedor lo ajusta en el CRM si es reja.
+    inst_key = (req.instalacion or "madera").lower()
+    if inst_key not in _LANDING_INSTALL:
+        inst_key = "madera"
+    install_price, install_label = _LANDING_INSTALL[inst_key]
     items = [{
         "name": f"{rec.brand} {rec.name}".strip(),
         "desc": "", "benefit": "",
-        "qty": quantity, "price": int(round(rec.price)),
+        "qty": quantity, "price": int(round(rec.price)), "kind": "product",
     }]
     if install_price:
         items.append({
             "name": install_label, "desc": "", "benefit": "",
-            "qty": 1, "price": install_price,
+            "qty": 1, "price": install_price, "kind": "install",
         })
     data = {
         "quote": {"number": folio, "slug": slug,
