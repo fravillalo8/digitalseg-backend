@@ -416,6 +416,7 @@ async def create_lead(payload: LeadPayload, request: Request) -> LeadResponse:
 
     # 4. Correo al CLIENTE: la PÁGINA DE VALOR (neuroventas) + pixel de apertura.
     #    (No el PDF de Odoo.) Sólo si hay email y la cotización quedó publicada.
+    client_emailed = False
     if c.email and published:
         try:
             html = _build_envio_html(nombre=c.nombre, page_url=page_url, pixel_url=pixel_url, folio=folio)
@@ -424,26 +425,35 @@ async def create_lead(payload: LeadPayload, request: Request) -> LeadResponse:
                 html=html,
                 to_addresses=[c.email],
             )
+            client_emailed = True
             log.info("Propuesta (página de valor) enviada al cliente %s", c.email)
         except Exception as e:
             log.error("Error enviando la propuesta al cliente: %s", e)
 
     # 5. Notificación interna al EQUIPO (siempre, aunque la RPC falle → no perder lead).
+    #    Dedupe: si el cliente YA recibió su propuesta (paso 4) y su correo está en la
+    #    lista del equipo, lo excluimos aquí para que NO le lleguen 2 correos (caso
+    #    típico: se prueba el cotizador con el propio correo del equipo).
     install_price, install_label = _LANDING_INSTALL.get((req.instalacion or "").lower(), (0, ""))
-    try:
-        team_html = _build_lead_html(
-            c, rec, req, quantity, install_label, install_price,
-            lead_url=_CRM_URL,
-            sale_url=(page_url if published else ""),
-            source=payload.source,
-        )
-        _send_email(
-            subject=f"🔔 Nuevo lead web: {c.nombre} — {rec.brand} {rec.name} × {quantity}",
-            html=team_html,
-            to_addresses=_INFORME_RECIPIENTS,
-        )
-    except Exception as e:
-        log.error("Error enviando la notificación al equipo: %s", e)
+    team_recipients = list(_INFORME_RECIPIENTS)
+    if client_emailed and c.email:
+        _cli = c.email.strip().lower()
+        team_recipients = [r for r in team_recipients if r.strip().lower() != _cli]
+    if team_recipients:
+        try:
+            team_html = _build_lead_html(
+                c, rec, req, quantity, install_label, install_price,
+                lead_url=_CRM_URL,
+                sale_url=(page_url if published else ""),
+                source=payload.source,
+            )
+            _send_email(
+                subject=f"🔔 Nuevo lead web: {c.nombre} — {rec.brand} {rec.name} × {quantity}",
+                html=team_html,
+                to_addresses=team_recipients,
+            )
+        except Exception as e:
+            log.error("Error enviando la notificación al equipo: %s", e)
 
     # 6. WhatsApp best-effort (no bloquea).
     try:
