@@ -1116,7 +1116,7 @@ async def pago_webhook(request: Request) -> dict:
                 # la ve al loguearse con ESE correo. Idempotente por payment_id.
                 try:
                     _rc = await _supa_rpc("portal_registrar_compra", {
-                        "p_secret":     os.getenv("PORTAL_COMPRA_SECRET", "ds_seg_7Kq2mN9xP4wL8vR3"),
+                        "p_secret":     os.getenv("PORTAL_COMPRA_SECRET", ""),
                         "p_email":      _cli_email,
                         "p_cliente":    cliente or "",
                         "p_producto":   _prod_c,
@@ -1132,7 +1132,7 @@ async def pago_webhook(request: Request) -> dict:
                 if _ref_emb:
                     try:
                         _re = await _supa_rpc("embajador_registrar_venta", {
-                            "p_secret":     os.getenv("PORTAL_COMPRA_SECRET", "ds_seg_7Kq2mN9xP4wL8vR3"),
+                            "p_secret":     os.getenv("PORTAL_COMPRA_SECRET", ""),
                             "p_ref":        _ref_emb,
                             "p_cliente":    (cliente or "").split(" ")[0],
                             "p_producto":   _prod_c,
