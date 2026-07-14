@@ -162,6 +162,7 @@ class PagoRequest(BaseModel):
     gateway: bool = False
     lead_id: Optional[int] = None
     ref: Optional[str] = Field(default=None, max_length=80)
+    ref_embajador: Optional[str] = Field(default=None, max_length=40)  # código de embajador (?ref= en el enlace)
     cupon: Optional[str] = Field(default=None, max_length=40)
     descuento: Optional[int] = None
 

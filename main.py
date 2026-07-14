@@ -937,6 +937,7 @@ async def crear_pago(req: PagoRequest, request: Request) -> PagoResponse:
             "telefono":      req.telefono,
             "cupon":         req.cupon or "",
             "descuento_clp": discount,
+            "ref_embajador": (req.ref_embajador or "").strip().upper(),
         },
     }
     if MP_WEBHOOK_URL:
@@ -1111,6 +1112,36 @@ async def pago_webhook(request: Request) -> dict:
                     to_addresses=[_cli_email],
                 )
                 log.info("Correo de bienvenida enviado al cliente ***%s", _cli_email[-6:])
+                # Registrar la compra en el portal (Mi compra + garantía). El cliente
+                # la ve al loguearse con ESE correo. Idempotente por payment_id.
+                try:
+                    _rc = await _supa_rpc("portal_registrar_compra", {
+                        "p_secret":     os.getenv("PORTAL_COMPRA_SECRET", "ds_seg_7Kq2mN9xP4wL8vR3"),
+                        "p_email":      _cli_email,
+                        "p_cliente":    cliente or "",
+                        "p_producto":   _prod_c,
+                        "p_monto":      int(float(_monto_c or 0)),
+                        "p_payment_id": str(payment_id),
+                        "p_cot_slug":   metadata.get("cot_slug") or None,
+                    })
+                    log.info("Compra registrada en portal: %s", _rc.status_code)
+                except Exception as exc:
+                    log.warning("Compra no registrada en portal: %s", exc)
+                # Atribuir comisión a un embajador si la venta llegó con su código (?ref=).
+                _ref_emb = (metadata.get("ref_embajador") or "").strip()
+                if _ref_emb:
+                    try:
+                        _re = await _supa_rpc("embajador_registrar_venta", {
+                            "p_secret":     os.getenv("PORTAL_COMPRA_SECRET", "ds_seg_7Kq2mN9xP4wL8vR3"),
+                            "p_ref":        _ref_emb,
+                            "p_cliente":    (cliente or "").split(" ")[0],
+                            "p_producto":   _prod_c,
+                            "p_monto":      int(float(_monto_c or 0)),
+                            "p_payment_id": str(payment_id),
+                        })
+                        log.info("Venta atribuida a embajador %s: %s", _ref_emb, _re.status_code)
+                    except Exception as exc:
+                        log.warning("No se pudo atribuir venta a embajador %s: %s", _ref_emb, exc)
             else:
                 log.info("Sin email del cliente en el pago → no se envió bienvenida")
         except Exception as exc:
