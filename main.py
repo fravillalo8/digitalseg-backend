@@ -1097,6 +1097,25 @@ async def pago_webhook(request: Request) -> dict:
         except Exception as exc:
             log.warning("Aviso de compra al equipo no enviado: %s", exc)
 
+        # Correo de BIENVENIDA + comprobante al CLIENTE (Resend). El email lo trae
+        # MercadoPago en payment.payer.email; si vino en la metadata, ese manda.
+        try:
+            _cli_email = (metadata.get("email")
+                          or (payment.get("payer") or {}).get("email") or "").strip()
+            if _cli_email and "@" in _cli_email:
+                _monto_c = payment.get("transaction_amount") or 0
+                _prod_c  = metadata.get("producto") or payment.get("description") or "tu cerradura inteligente"
+                _send_email(
+                    subject=f"🎉 ¡Gracias por tu compra en DigitalSeg, {cliente or ''}!".strip().rstrip("!") + "!",
+                    html=_build_bienvenida_cliente_html(cliente, _prod_c, _monto_c, payment_id),
+                    to_addresses=[_cli_email],
+                )
+                log.info("Correo de bienvenida enviado al cliente ***%s", _cli_email[-6:])
+            else:
+                log.info("Sin email del cliente en el pago → no se envió bienvenida")
+        except Exception as exc:
+            log.warning("Correo de bienvenida al cliente no enviado: %s", exc)
+
     return {"ok": True, "payment_id": payment_id, "status": status, "conta": res_conta}
 
 
@@ -1247,6 +1266,58 @@ def _build_compra_html(cliente: str, telefono: str, producto: str, monto,
 </body></html>"""
 
 
+def _build_bienvenida_cliente_html(cliente: str, producto, monto, payment_id: str = "") -> str:
+    """Correo al CLIENTE tras el pago aprobado: bienvenida + comprobante de compra +
+    próximos pasos de instalación + portal (garantía/manuales/soporte). Firma Sebastián."""
+    primer = (str(cliente or "").strip().split(" ") or [""])[0]
+    nombre = escape(primer) if primer else "¡Hola!"
+    prod   = escape(str(producto or "tu cerradura inteligente"))
+    try:
+        monto_fmt = f"${float(monto or 0):,.0f}".replace(",", ".")
+    except Exception:
+        monto_fmt = escape(str(monto or "—"))
+    wa = "https://wa.me/56946880196?text=Hola%2C+acabo+de+comprar+y+quiero+coordinar+mi+instalaci%C3%B3n"
+    return f"""\
+<!doctype html><html lang="es"><body style="margin:0;background:#eef2f7;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef2f7;padding:26px 12px;"><tr><td align="center">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:540px;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 6px 24px rgba(10,27,51,.12);">
+    <tr><td style="background:#0a1b33;padding:26px 30px;">
+      <div style="color:#7fb5e6;font:800 12px/1 Arial,sans-serif;letter-spacing:2px;text-transform:uppercase;">DigitalSeg · Compra confirmada</div>
+      <div style="color:#ffffff;font:800 23px/1.3 Arial,sans-serif;margin-top:10px;">¡Gracias, {nombre}! 🎉</div>
+      <div style="color:#c9d6e5;font:400 15px/1.5 Arial,sans-serif;margin-top:6px;">Tu tranquilidad ya está en camino. Bienvenido a la familia DigitalSeg.</div>
+    </td></tr>
+    <tr><td style="padding:24px 30px 6px;">
+      <div style="background:#f4f9f4;border:1px solid #d6ecd6;border-radius:12px;padding:18px 20px;">
+        <div style="font:700 12px/1 Arial,sans-serif;color:#2f8847;letter-spacing:.5px;text-transform:uppercase;">Tu compra</div>
+        <div style="font:800 17px/1.4 Arial,sans-serif;color:#0a1b33;margin-top:8px;">{prod}</div>
+        <div style="font:900 22px/1.2 Arial,sans-serif;color:#2f8847;margin-top:6px;">{monto_fmt}</div>
+        <div style="font:400 12px/1.4 Arial,sans-serif;color:#7a91a9;margin-top:6px;">✅ Pago confirmado · comprobante de tu compra</div>
+      </div>
+    </td></tr>
+    <tr><td style="padding:14px 30px 4px;">
+      <div style="font:800 15px/1.3 Arial,sans-serif;color:#0a1b33;margin-bottom:12px;">Qué sigue ahora 👇</div>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font:400 14px/1.55 Arial,sans-serif;color:#3a4d63;">
+        <tr><td style="padding:6px 0;"><b style="color:#3DAA57;">1.</b> Nuestro técnico del Valle del Aconcagua te va a <b>escribir por WhatsApp</b> para coordinar el <b>día y la hora</b> de tu instalación.</td></tr>
+        <tr><td style="padding:6px 0;"><b style="color:#3DAA57;">2.</b> Te la dejamos <b>instalada y funcionando</b> — instalación profesional certificada, que es lo que hace que tu <b>garantía de 12 meses</b> valga.</td></tr>
+        <tr><td style="padding:6px 0;"><b style="color:#3DAA57;">3.</b> Te enseñamos a usarla (huellas, claves, app) antes de irnos.</td></tr>
+      </table>
+    </td></tr>
+    <tr><td style="padding:18px 30px 6px;" align="center">
+      <a href="https://portal.digitalseg.cl" style="display:inline-block;background:#0a1b33;color:#ffffff;text-decoration:none;font:800 15px/1 Arial,sans-serif;padding:15px 30px;border-radius:10px;">Entrar a mi portal →</a>
+      <div style="font:400 12px/1.5 Arial,sans-serif;color:#7a91a9;margin-top:10px;">En tu portal tienes tu <b>garantía</b>, los <b>manuales</b> de tu cerradura y <b>soporte</b> cuando lo necesites.</div>
+    </td></tr>
+    <tr><td style="padding:16px 30px 26px;">
+      <div style="border-top:1px solid #e3e9f0;padding-top:16px;font:400 13px/1.6 Arial,sans-serif;color:#5a6c80;">
+        ¿Dudas o quieres apurar tu instalación? Escríbeme directo:<br>
+        <b style="color:#0a1b33;">Sebastián Cabrera</b> · <a href="{wa}" style="color:#3DAA57;text-decoration:none;">WhatsApp +56 9 4688 0196</a> · <a href="mailto:sebastian.cabrera@digitalseg.cl" style="color:#3DAA57;text-decoration:none;">sebastian.cabrera@digitalseg.cl</a>
+      </div>
+    </td></tr>
+  </table>
+  <div style="max-width:540px;font:400 11px/1.5 Arial,sans-serif;color:#9fb0c2;margin-top:14px;text-align:center;">SEGURIDAD DIGITAL SpA (DigitalSeg) · RUT 78.219.543-3 · Valle del Aconcagua, Chile</div>
+</td></tr></table>
+</body></html>"""
+
+
 def _build_cotizacion_html(
     nombre: str,
     producto: str,
@@ -1288,7 +1359,7 @@ def _build_cotizacion_html(
     else:
         install_block = (
             '<div style="background:#fff8e1;border-left:4px solid #f5a623;border-radius:0 8px 8px 0;padding:16px;margin-bottom:20px">'
-            '<p style="margin:0;font-size:13px;color:#7a5a00;line-height:1.6">🔧 La instalación profesional es <strong>obligatoria</strong> (garantía 12 meses): <strong>$89.990</strong> madera · <strong>$99.990</strong> reja/fierro.</p>'
+            '<p style="margin:0;font-size:13px;color:#7a5a00;line-height:1.6">🔧 La instalación profesional es <strong>obligatoria</strong> (garantía 12 meses): <strong>$85.000</strong> madera · <strong>$105.000</strong> reja/fierro.</p>'
             '</div>'
         )
 
