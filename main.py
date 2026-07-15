@@ -2472,8 +2472,10 @@ async def cotizador_simulacion(request: Request) -> dict:
 
     mid = str(body.get("modelo_id") or "")
     desc = _sim_desc(mid)
-    # Modo tuning (protegido por secreto): permite probar prompt/referencia sin afectar a los visitantes
-    dbg = str(body.get("p_secret") or "") == _SEG_SECRET
+    # Modo tuning (protegido por secreto): permite probar prompt/referencia sin afectar a los visitantes.
+    # Requiere secreto NO vacío: si _SEG_SECRET no está seteado, el modo tuning queda apagado
+    # (evita que un p_secret vacío lo active y permita override de prompt/ref_url — SSRF/inyección).
+    dbg = bool(_SEG_SECRET) and str(body.get("p_secret") or "") == _SEG_SECRET
     prompt_override = (str(body.get("prompt_override") or "").strip() if dbg else "")
     ref_url_override = (str(body.get("ref_url_override") or "").strip() if dbg else "")
 
@@ -2655,8 +2657,9 @@ _ALERT_RECIPIENTS = [
 ]
 _CRM_URL = os.getenv("CRM_URL", "https://zentral.digitalseg.cl")
 # Secreto compartido con las RPC de seguimiento (protege PII de la anon key pública).
-# Mismo valor en el SQL. Se puede override por env en Railway + SQL.
-_SEG_SECRET = os.getenv("SEGUIMIENTO_SECRET", "ds_seg_7Kq2mN9xP4wL8vR3")
+# SIN fallback hardcodeado: el valor se define SOLO por env en Railway y debe ser igual
+# a app_secrets.rpc_secret (ver fixes-seguridad-yinsuj.sql / rotar-secreto-seguimiento.sql).
+_SEG_SECRET = os.getenv("SEGUIMIENTO_SECRET", "")
 
 
 async def _supa_rpc(name: str, params: dict | None = None) -> httpx.Response:
