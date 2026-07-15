@@ -2964,4 +2964,8 @@ async def health() -> dict:
         "mercadopago": bool(MP_ACCESS_TOKEN),
         "mp_webhook_secret": bool(os.getenv("MP_WEBHOOK_SECRET", "")),
         "conta": conta.configured,
+        # Solo booleanos (nunca el valor): para verificar tras la rotación que las
+        # env vars de secreto quedaron seteadas en Railway.
+        "seg_secret": bool(_SEG_SECRET),
+        "compra_secret": bool(os.getenv("PORTAL_COMPRA_SECRET", "")),
     }
