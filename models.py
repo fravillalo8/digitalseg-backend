@@ -189,3 +189,39 @@ class InformeSeguridad(BaseModel):
     respuestas: dict = {}
     findings: list[str] = Field(default=[], max_length=50)
     recs: list[str] = Field(default=[], max_length=50)
+
+
+# ── Cotización de un VENDEDOR (programa "Gana con Digitalseg") ────────────────
+# El portal del vendedor (gana.digitalseg.cl) manda esto al backend para publicar
+# la página de valor /q/ y enviar el correo al cliente + aviso al equipo.
+class VendorCotItem(BaseModel):
+    name: str = Field(max_length=160)
+    qty: int = 1
+    price: int = 0
+    kind: str = Field(default="product", max_length=20)   # 'product' | 'install'
+    img: Optional[str] = Field(default=None, max_length=400)   # URL absoluta (para el correo)
+    feats: list[str] = Field(default=[], max_length=12)
+
+
+class VendorCotPayload(BaseModel):
+    numero: str = Field(default="", max_length=40)
+    vendedor_nombre: str = Field(default="", max_length=120)
+    vendedor_codigo: str = Field(default="", max_length=40)
+    vendedor_email: Optional[str] = Field(default=None, max_length=140)
+    cliente: str = Field(default="", max_length=140)
+    cliente_email: Optional[str] = Field(default=None, max_length=140)
+    cliente_telefono: Optional[str] = Field(default=None, max_length=40)
+    items: list[VendorCotItem] = Field(default=[], max_length=40)
+    descuento_pct: float = 0
+    descuento: int = 0
+    monto: int = 0          # lo que paga el cliente (con descuento)
+    monto_lista: int = 0    # precio de lista
+
+
+class VendorCotResponse(BaseModel):
+    ok: bool
+    published: bool = False
+    client_emailed: bool = False
+    team_notified: bool = False
+    page_url: str = ""
+    folio: str = ""

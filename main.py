@@ -35,6 +35,7 @@ from models import (
     LeadPayload, LeadResponse, SendTemplateRequest,
     VisitaRequest, ImplementacionRequest, AgendaEvent, AgendaBookingResponse,
     PagoRequest, PagoResponse, InformeSeguridad,
+    VendorCotPayload, VendorCotResponse,
 )
 from odoo_client import OdooClient
 from whatsapp_client import WhatsAppClient
@@ -213,6 +214,7 @@ for _extra_origin in (
     "https://portal.digitalseg.cl",
     "https://conta.digitalseg.cl",
     "https://care.digitalseg.cl",
+    "https://gana.digitalseg.cl",
 ):
     if _extra_origin not in _cors_origins:
         _cors_origins.append(_extra_origin)
@@ -489,6 +491,199 @@ async def create_lead(payload: LeadPayload, request: Request) -> LeadResponse:
         slug=(slug if published else None),
         cotizacion_url=(page_url if published else None),
         message=msg,
+    )
+
+
+# ── POST /api/cotizacion-vendedor ───────────────────────────────────────────────
+#   El portal del vendedor (gana.digitalseg.cl) publica la cotización como PÁGINA DE
+#   VALOR (/q/?c=<slug>) — la misma experiencia de neuroventas del CRM — y manda el
+#   link por correo al CLIENTE (con fotos + info técnica) + un aviso al EQUIPO
+#   (Sebastián/Francisco). NO registra la cotización en el CRM: ya vive en
+#   embajador_cotizaciones y sale en la vista global de gestión → usa la RPC liviana
+#   embajador_publicar_pagina (solo cotizaciones_pub), evitando la duplicación.
+
+def _build_vendor_cot_data(payload: VendorCotPayload, folio: str, slug: str,
+                           emission: str, vence: str) -> tuple[dict, int]:
+    """Arma el objeto `data` que consume la página /q/, con TODOS los items del
+    vendedor (productos + instalación). Devuelve (data, list_price)."""
+    items = []
+    for it in payload.items:
+        items.append({
+            "name": _safe_text(it.name, 160), "desc": "", "benefit": "",
+            "qty": max(1, int(it.qty or 1)), "price": max(0, int(it.price or 0)),
+            "kind": ("install" if (it.kind or "") == "install" else "product"),
+        })
+    list_price = sum(int(i["price"]) * int(i["qty"] or 1) for i in items)
+    vendedor = _safe_text(payload.vendedor_nombre, 120) or "Tu asesor DigitalSeg"
+    data = {
+        "quote": {"number": folio, "slug": slug,
+                  "emissionDate": emission, "expiryDate": vence, "estado": "enviada"},
+        "client": {"fullName": _safe_text(payload.cliente), "rut": "", "razonSocial": ""},
+        "salesperson": {"name": vendedor,
+                        "phoneDisplay": "+56 9 4688 0196", "whatsapp": "56946880196"},
+        "items": items,
+        "pago": {"contadoDiscountPct": max(0, min(5, int(round(payload.descuento_pct or 0)))),
+                 "cuotasCount": 3, "cuotasOptions": [3, 6], "facturaDisponible": True},
+        "sectors": {"modes": _map_sector_modes(None)},
+    }
+    return data, list_price
+
+
+def _build_vendor_client_html(payload: VendorCotPayload, list_price: int,
+                              page_url: str, pixel_url: str, folio: str) -> str:
+    """Correo al CLIENTE: fotos + info técnica de los productos + link a la propuesta."""
+    nm = escape((payload.cliente or "").split(" ")[0] or "Hola")
+    cards = ""
+    for it in payload.items:
+        if (it.kind or "") == "install":
+            continue
+        img = escape(it.img or "")
+        feats = "".join(f'<li style="margin:0 0 3px;">{escape(f)}</li>' for f in (it.feats or [])[:6])
+        img_html = (f'<img src="{img}" width="120" alt="" style="width:120px;height:120px;'
+                    f'object-fit:contain;background:#0f1115;border-radius:10px;">') if img else ""
+        cards += f"""
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 12px;background:#0f1115;border:1px solid #232a36;border-radius:12px;">
+          <tr>
+            <td width="132" style="padding:12px;vertical-align:top;">{img_html}</td>
+            <td style="padding:12px 12px 12px 0;vertical-align:top;color:#c4ccd8;font:400 13px/1.5 Arial,sans-serif;">
+              <div style="color:#eef2f7;font:700 15px Arial,sans-serif;margin:0 0 4px;">{escape(it.name)}</div>
+              <div style="color:#3DAA57;font:700 14px Arial,sans-serif;margin:0 0 6px;">{escape(str(it.qty))}&times; {_clp(it.price)}</div>
+              <ul style="margin:0;padding-left:16px;color:#8a94a6;font-size:12px;">{feats}</ul>
+            </td>
+          </tr>
+        </table>"""
+    desc = int(payload.descuento or 0)
+    pagado = int(payload.monto or list_price)
+    tot_rows = ""
+    if desc > 0:
+        tot_rows += (f'<tr><td style="color:#8a94a6;padding:2px 0;">Precio de lista</td>'
+                     f'<td align="right" style="color:#c4ccd8;">{_clp(payload.monto_lista or list_price)}</td></tr>'
+                     f'<tr><td style="color:#8a94a6;padding:2px 0;">Descuento</td>'
+                     f'<td align="right" style="color:#3DAA57;">-{_clp(desc)}</td></tr>')
+    tot_rows += (f'<tr><td style="color:#eef2f7;font-weight:700;padding-top:6px;">Total</td>'
+                 f'<td align="right" style="color:#eef2f7;font-weight:800;font-size:18px;padding-top:6px;">{_clp(pagado)}</td></tr>')
+    return f"""\
+<!doctype html><html lang="es"><body style="margin:0;padding:0;background:#0f1115;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0f1115;padding:28px 12px;">
+<tr><td align="center">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#151922;border-radius:16px;overflow:hidden;border:1px solid #232a36;">
+    <tr><td style="background:#ffffff;padding:22px 28px 18px;text-align:center;border-bottom:3px solid #3FA83C;">
+      <div style="font-family:Arial,sans-serif;font-weight:800;font-size:24px;letter-spacing:1px;color:#3C82C6;">DIGITAL<span style="color:#3FA83C;">SEG</span></div>
+      <div style="font-family:Arial,sans-serif;font-size:9.5px;font-weight:700;letter-spacing:2.5px;margin-top:6px;"><span style="color:#3C82C6;">SEGURIDAD</span> <span style="color:#3FA83C;">INTELIGENTE</span></div>
+    </td></tr>
+    <tr><td style="background:linear-gradient(135deg,#151922,#1c2430);padding:22px 28px;">
+      <div style="color:#eef2f7;font:700 21px/1.3 Arial,sans-serif;">{nm}, tu propuesta está lista 🔐</div>
+    </td></tr>
+    <tr><td style="padding:22px 28px 6px;color:#c4ccd8;font:400 15px/1.6 Arial,sans-serif;">
+      <p style="margin:0 0 16px;">Esto fue lo que preparamos para ti, pensado en tu tranquilidad:</p>
+      {cards}
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:8px 0 4px;font:400 14px Arial,sans-serif;">{tot_rows}</table>
+      <p style="margin:14px 0 20px;font-size:13px;color:#8a94a6;">🛡️ La instalación profesional va en la cotización (costo aparte) y es necesaria para la <b style="color:#c4ccd8;">garantía de 12 meses</b>. Hasta en 6 cuotas sin interés.</p>
+      <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto 6px;"><tr><td style="border-radius:12px;background:#3DAA57;">
+        <a href="{page_url}" style="display:inline-block;padding:15px 34px;color:#0f1115;font:700 16px Arial,sans-serif;text-decoration:none;border-radius:12px;">Ver mi propuesta completa &rarr;</a>
+      </td></tr></table>
+      <p style="margin:16px 0 0;font-size:12px;color:#8a94a6;">Si el botón no abre, copia este enlace:<br><a href="{page_url}" style="color:#3DAA57;word-break:break-all;">{page_url}</a></p>
+    </td></tr>
+    <tr><td style="padding:18px 28px;border-top:1px solid #232a36;color:#8a94a6;font:400 13px/1.6 Arial,sans-serif;">
+      Te atiende <b style="color:#c4ccd8;">{escape(payload.vendedor_nombre or "Sebastián Cabrera")}</b> &middot; DigitalSeg<br>
+      WhatsApp <a href="https://wa.me/56946880196" style="color:#3DAA57;">+56 9 4688 0196</a> &middot; Propuesta {escape(folio)}
+    </td></tr>
+  </table>
+</td></tr></table>
+<img src="{pixel_url}" width="1" height="1" alt="" style="display:block;width:1px;height:1px;opacity:0;border:0;"/>
+</body></html>"""
+
+
+def _build_vendor_notif_html(payload: VendorCotPayload, list_price: int, page_url: str) -> str:
+    """Aviso interno al equipo: qué vendedor cotizó a qué cliente."""
+    rows = ""
+    for it in payload.items:
+        rows += (f'<tr><td style="padding:4px 8px;border-bottom:1px solid #eee;">{escape(str(it.qty))}&times; {escape(it.name)}</td>'
+                 f'<td align="right" style="padding:4px 8px;border-bottom:1px solid #eee;">{_clp(int(it.price)*int(it.qty or 1))}</td></tr>')
+    pagado = int(payload.monto or list_price)
+    tel = (' &middot; ' + escape(payload.cliente_telefono)) if payload.cliente_telefono else ''
+    cli_mail = (' &middot; ' + escape(payload.cliente_email)) if payload.cliente_email else ''
+    descnote = (' (desc. ' + _clp(int(payload.descuento)) + ')') if int(payload.descuento or 0) > 0 else ''
+    link = (f'<p><a href="{page_url}">{page_url}</a></p>' if page_url else '')
+    return f"""\
+<!doctype html><html><body style="font-family:Arial,sans-serif;color:#111;">
+  <h2 style="margin:0 0 4px;">🔔 Cotización de vendedor</h2>
+  <p style="margin:0 0 12px;color:#555;">Un vendedor del programa <b>Gana con Digitalseg</b> generó una cotización.</p>
+  <table cellpadding="0" cellspacing="0" style="font-size:14px;margin:0 0 12px;">
+    <tr><td style="color:#888;padding:2px 12px 2px 0;">Vendedor</td><td><b>{escape(payload.vendedor_nombre or '—')}</b> ({escape(payload.vendedor_codigo or '—')})</td></tr>
+    <tr><td style="color:#888;padding:2px 12px 2px 0;">Cliente</td><td>{escape(payload.cliente or '—')}{tel}{cli_mail}</td></tr>
+    <tr><td style="color:#888;padding:2px 12px 2px 0;">Total cliente</td><td><b>{_clp(pagado)}</b>{descnote}</td></tr>
+  </table>
+  <table cellpadding="0" cellspacing="0" style="font-size:13px;border-collapse:collapse;">{rows}</table>
+  {link}
+  <p style="color:#888;font-size:12px;margin-top:12px;">La comisión del vendedor se calcula sobre el precio de lista al cerrar la venta en gestión.</p>
+</body></html>"""
+
+
+@app.post("/api/cotizacion-vendedor", response_model=VendorCotResponse)
+async def cotizacion_vendedor(payload: VendorCotPayload, request: Request) -> VendorCotResponse:
+    """Publica la página de valor del vendedor + correo al cliente + aviso al equipo."""
+    _check_rate(request)
+    if not payload.items:
+        return VendorCotResponse(ok=False)
+    cliente  = _safe_text(payload.cliente) or "Cliente"
+    emission = datetime.utcnow().strftime("%Y-%m-%d")
+    vence    = (datetime.utcnow() + timedelta(days=30)).strftime("%Y-%m-%d")
+    folio    = _safe_text(payload.numero, 40) or ("VEND-" + datetime.utcnow().strftime("%y%m%d") + "-" + secrets.token_hex(2).upper())
+    slug     = (_cot_slugify(cliente) or "cliente") + "-" + secrets.token_hex(8)
+    data, list_price = _build_vendor_cot_data(payload, folio, slug, emission, vence)
+
+    page_url  = f"{_COT_PAGE_BASE}/?c={slug}"
+    pixel_url = f"{_PUBLIC_BASE}/t/o.gif?c={slug}"
+
+    # 1) Publicar SOLO la página de valor pública (no toca el CRM → no duplica).
+    published = False
+    try:
+        r = await _supa_rpc("embajador_publicar_pagina", {
+            "p_secret": _COT_LANDING_SECRET,
+            "p_slug": slug, "p_folio": folio, "p_data": data,
+            "p_numero": (payload.numero or None), "p_estado": "enviada",
+            "p_cliente_email": (payload.cliente_email or None),
+        })
+        published = (r.status_code == 200)
+        if not published:
+            log.error("embajador_publicar_pagina %s: %s", r.status_code, r.text[:200])
+    except Exception as e:
+        log.error("embajador_publicar_pagina falló: %s", e)
+
+    # 2) Correo al CLIENTE: la propuesta (fotos + info técnica) + link a la página.
+    client_emailed = False
+    if payload.cliente_email and published:
+        try:
+            _send_email(
+                subject="Tu propuesta DigitalSeg está lista 🔐",
+                html=_build_vendor_client_html(payload, list_price, page_url, pixel_url, folio),
+                to_addresses=[payload.cliente_email],
+            )
+            client_emailed = True
+        except Exception as e:
+            log.error("Correo cliente (cot vendedor) falló: %s", e)
+
+    # 3) Aviso al EQUIPO (Sebastián/Francisco...). Dedupe si el cliente está en la lista.
+    team_notified = False
+    recipients = list(_INFORME_RECIPIENTS)
+    if payload.cliente_email:
+        _cli = payload.cliente_email.strip().lower()
+        recipients = [r for r in recipients if r.strip().lower() != _cli]
+    if recipients:
+        try:
+            _send_email(
+                subject=f"🔔 Cotización de vendedor: {payload.vendedor_nombre or '—'} → {cliente} ({_clp(payload.monto or list_price)})",
+                html=_build_vendor_notif_html(payload, list_price, (page_url if published else "")),
+                to_addresses=recipients,
+            )
+            team_notified = True
+        except Exception as e:
+            log.error("Aviso equipo (cot vendedor) falló: %s", e)
+
+    return VendorCotResponse(
+        ok=published, published=published, client_emailed=client_emailed,
+        team_notified=team_notified, page_url=(page_url if published else ""), folio=folio,
     )
 
 
