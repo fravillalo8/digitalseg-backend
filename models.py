@@ -225,3 +225,17 @@ class VendorCotResponse(BaseModel):
     team_notified: bool = False
     page_url: str = ""
     folio: str = ""
+
+
+# ── Relevamiento de puerta (el vendedor manda fotos + medidas; la IA recomienda) ──
+class RelevFoto(BaseModel):
+    tipo: str = Field(default="", max_length=40)   # completa|canto|afuera|adentro|marco
+    b64: str = ""                                  # JPEG en base64 (ya comprimido en el navegador)
+
+
+class RelevamientoPayload(BaseModel):
+    relevamiento_id: Optional[str] = Field(default=None, max_length=60)
+    cliente: str = Field(default="", max_length=140)
+    medidas: dict = {}                             # {espesor_mm, backset_mm, material, sentido, ...}
+    fotos: list[RelevFoto] = Field(default=[], max_length=6)
+    catalogo: list[dict] = Field(default=[], max_length=40)

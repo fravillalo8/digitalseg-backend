@@ -35,7 +35,7 @@ from models import (
     LeadPayload, LeadResponse, SendTemplateRequest,
     VisitaRequest, ImplementacionRequest, AgendaEvent, AgendaBookingResponse,
     PagoRequest, PagoResponse, InformeSeguridad,
-    VendorCotPayload, VendorCotResponse,
+    VendorCotPayload, VendorCotResponse, RelevamientoPayload,
 )
 from odoo_client import OdooClient
 from whatsapp_client import WhatsAppClient
@@ -685,6 +685,103 @@ async def cotizacion_vendedor(payload: VendorCotPayload, request: Request) -> Ve
         ok=published, published=published, client_emailed=client_emailed,
         team_notified=team_notified, page_url=(page_url if published else ""), folio=folio,
     )
+
+
+# ── POST /api/relevamiento-ia ───────────────────────────────────────────────────
+#   El vendedor (gana.digitalseg.cl) manda fotos de la puerta + las medidas; Claude
+#   (visión) evalúa la compatibilidad y recomienda modelos DEL CATÁLOGO. Es una
+#   ORIENTACIÓN: el técnico confirma antes de instalar. Las fotos NO se guardan acá
+#   (viven en el bucket privado de Supabase); solo se usan para el análisis.
+
+_RELEV_SYSTEM = """Eres un técnico experto de DigitalSeg (Valle del Aconcagua, Chile) que evalúa puertas
+para instalar CERRADURAS INTELIGENTES. Un vendedor en terreno te manda fotos de la puerta y las medidas
+que tomó. Tu trabajo: decir qué modelos del catálogo CALZAN en esa puerta.
+
+Lo que manda para la compatibilidad:
+- ESPESOR de la puerta (mm): la mayoría de las cerraduras inteligentes calzan entre 40 y 55 mm.
+  Menos de 38 mm o más de 60 mm → alerta, puede necesitar kit especial o no calzar.
+- BACKSET (mm): del borde de la puerta al centro de la perforación. Típico 60 o 70 mm.
+- MATERIAL: madera y metal aceptan la mayoría. Vidrio templado y reja necesitan modelos específicos
+  (ej. modelos para puerta de vidrio o RIM/sobrepuestos).
+- Puerta muy angosta, marco delgado o cerradura sobrepuesta antigua → confirmar con técnico.
+
+Reglas estrictas:
+- Recomienda SOLO modelos que estén en la lista del catálogo que te pasan. Nunca inventes modelos.
+- Máximo 3 modelos, ordenados del más recomendado al menos.
+- "compatibilidad" solo puede ser: "alta", "media" o "baja".
+- Si una foto no se ve bien, falta un dato o algo no calza, dilo en "alertas". NO inventes lo que no ves.
+- Habla simple y directo, en español de Chile, como técnico a vendedor.
+- Responde SOLO un JSON válido, sin texto adicional ni markdown, con esta forma EXACTA:
+{"resumen":"...","modelos":[{"nombre":"...","motivo":"...","compatibilidad":"alta"}],"alertas":["..."]}
+"""
+
+
+@app.post("/api/relevamiento-ia")
+async def relevamiento_ia(payload: RelevamientoPayload, request: Request) -> dict:
+    """Analiza fotos + medidas de una puerta y recomienda cerraduras compatibles."""
+    _check_rate(request)
+    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        return {"ok": False, "error": "IA no disponible"}
+    fotos = [f for f in (payload.fotos or []) if (f.b64 or "").strip()][:5]
+    if not fotos:
+        return {"ok": False, "error": "sin fotos"}
+
+    content: list = []
+    for f in fotos:
+        content.append({"type": "image", "source": {
+            "type": "base64", "media_type": "image/jpeg", "data": f.b64.strip()}})
+        content.append({"type": "text", "text": f"↑ Foto: {_safe_text(f.tipo, 40) or 'puerta'}"})
+
+    cat_lines = []
+    for c in (payload.catalogo or [])[:30]:
+        nombre = _safe_text(str(c.get("nombre", "")), 80)
+        if not nombre:
+            continue
+        try:
+            precio = _clp(int(c.get("precio") or 0))
+        except Exception:
+            precio = ""
+        cat_lines.append(f"- {nombre} {precio}".rstrip())
+    catalogo_txt = "\n".join(cat_lines) or "(no se envió catálogo)"
+
+    content.append({"type": "text", "text":
+        "MEDIDAS QUE TOMÓ EL VENDEDOR:\n"
+        + json.dumps(payload.medidas or {}, ensure_ascii=False)
+        + "\n\nCATÁLOGO DIGITALSEG DISPONIBLE (recomienda SOLO de acá):\n"
+        + catalogo_txt
+        + "\n\nDevuelve SOLO el JSON pedido."})
+
+    body = {
+        "model": os.getenv("ANTHROPIC_MODEL_VISION",
+                           os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")),
+        "max_tokens": 900,
+        "system": _RELEV_SYSTEM,
+        "messages": [{"role": "user", "content": content}],
+    }
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={"content-type": "application/json", "x-api-key": api_key,
+                         "anthropic-version": "2023-06-01"},
+                json=body,
+            )
+        if r.status_code != 200:
+            log.error("Anthropic relevamiento-ia %s: %s", r.status_code, r.text[:200])
+            return {"ok": False, "error": "la IA no respondió"}
+        txt = ((r.json().get("content") or [{}])[0].get("text") or "").strip()
+        if txt.startswith("```"):
+            txt = re.sub(r"^```[a-zA-Z]*\s*|\s*```$", "", txt).strip()
+        rec = json.loads(txt)
+        if not isinstance(rec, dict):
+            return {"ok": False, "error": "respuesta inválida"}
+        rec.setdefault("modelos", [])
+        rec.setdefault("alertas", [])
+        return {"ok": True, "recomendacion": rec}
+    except Exception as e:
+        log.error("relevamiento-ia: %s", e)
+        return {"ok": False, "error": "no se pudo analizar"}
 
 
 # ── GET /api/whatsapp/webhook — verificación Meta ───────────────────────────────
