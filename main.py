@@ -206,10 +206,15 @@ if _dev_mode:
         "http://127.0.0.1:3000",
     ]
 
-# Subdominios internos que llaman al backend (CRM Zentral/gestión, página de valor, portal)
+# El sitio público (cotizador) y los subdominios internos que llaman al backend.
+# ⚠️ www.digitalseg.cl es CRÍTICO: si falta, el cliente que entra por www NO puede
+# cotizar (preflight CORS falla, el lead se pierde en silencio). Bug real 25-jul-2026.
 for _extra_origin in (
+    "https://www.digitalseg.cl",
     "https://zentral.digitalseg.cl",
     "https://gestion.digitalseg.cl",
+    "https://core.digitalseg.cl",
+    "https://capital.digitalseg.cl",
     "https://cotizacion.digitalseg.cl",
     "https://portal.digitalseg.cl",
     "https://conta.digitalseg.cl",
@@ -219,10 +224,18 @@ for _extra_origin in (
     if _extra_origin not in _cors_origins:
         _cors_origins.append(_extra_origin)
 
+# Red de seguridad definitiva: acepta CUALQUIER origen *.digitalseg.cl (apex, www y
+# todo subdominio, presente o futuro) → un origen nuevo nunca vuelve a romper el
+# cotizador. Seguro: allow_credentials=False y cada endpoint tiene su propia auth
+# (secreto del lead / X-Admin-Key). En dev además localhost.
+_prod_origin_regex = r"https://([a-z0-9-]+\.)*digitalseg\.cl"
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
-    allow_origin_regex=(r"http://(localhost|127\.0\.0\.1)(:\d+)?" if _dev_mode else None),
+    allow_origin_regex=(
+        rf"({_prod_origin_regex}|http://(localhost|127\.0\.0\.1)(:\d+)?)"
+        if _dev_mode else _prod_origin_regex
+    ),
     allow_methods=["POST", "GET", "OPTIONS"],
     allow_headers=["Content-Type", "X-Admin-Key", "X-Sb-Token"],
     allow_credentials=False,
@@ -241,6 +254,19 @@ _DS_SUPA_ANON = os.getenv(
     "DIGITALSEG_SUPABASE_ANON",
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlpbnN1am5zYml4ZmxlZGJwbW1hIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMzNjA1NjEsImV4cCI6MjA5ODkzNjU2MX0.BWQMfU7SfZefJC5xSYdbefR9AvQIOHz4AhN6r-vEJJY",
 )
+# service_role (SECRETA — solo en el env de Railway, jamás en el navegador). Habilita
+# el envío del código de acceso del portal por NUESTRO Resend cuando el SMTP de Supabase
+# Auth falla ("Error sending magic link email"). Sin esta env, el endpoint responde 503.
+_DS_SUPA_SERVICE = (
+    os.getenv("DIGITALSEG_SUPABASE_SERVICE_ROLE")
+    or os.getenv("SUPABASE_SERVICE_KEY")
+    or os.getenv("SUPABASE_SERVICE_ROLE")
+    or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    or os.getenv("SUPABASE_SERVICE")
+    or ""
+)
+# Throttle en memoria para el envío de código (por correo): mín. 45s entre envíos.
+_OTP_LAST_SENT: dict[str, datetime] = {}
 _CRM_ALLOWED_EMAILS = {
     "sebastian.cabrera@digitalseg.cl",
     "francisco.villalobos@digitalseg.cl",
@@ -1589,9 +1615,11 @@ def _build_compra_html(cliente: str, telefono: str, producto: str, monto,
 </body></html>"""
 
 
-def _build_bienvenida_cliente_html(cliente: str, producto, monto, payment_id: str = "") -> str:
+def _build_bienvenida_cliente_html(cliente: str, producto, monto, payment_id: str = "",
+                                   portal_url: str = "https://portal.digitalseg.cl") -> str:
     """Correo al CLIENTE tras el pago aprobado: bienvenida + comprobante de compra +
-    próximos pasos de instalación + portal (garantía/manuales/soporte). Firma Sebastián."""
+    próximos pasos de instalación + portal (garantía/manuales/soporte). Firma Sebastián.
+    portal_url permite deep-link con el correo pre-cargado (?email=&nombre=) en la invitación."""
     primer = (str(cliente or "").strip().split(" ") or [""])[0]
     nombre = escape(primer) if primer else "¡Hola!"
     prod   = escape(str(producto or "tu cerradura inteligente"))
@@ -1626,12 +1654,68 @@ def _build_bienvenida_cliente_html(cliente: str, producto, monto, payment_id: st
       </table>
     </td></tr>
     <tr><td style="padding:18px 30px 6px;" align="center">
-      <a href="https://portal.digitalseg.cl" style="display:inline-block;background:#0a1b33;color:#ffffff;text-decoration:none;font:800 15px/1 Arial,sans-serif;padding:15px 30px;border-radius:10px;">Entrar a mi portal →</a>
+      <a href="{escape(portal_url)}" style="display:inline-block;background:#0a1b33;color:#ffffff;text-decoration:none;font:800 15px/1 Arial,sans-serif;padding:15px 30px;border-radius:10px;">Entrar a mi portal →</a>
       <div style="font:400 12px/1.5 Arial,sans-serif;color:#7a91a9;margin-top:10px;">En tu portal tienes tu <b>garantía</b>, los <b>manuales</b> de tu cerradura y <b>soporte</b> cuando lo necesites.</div>
     </td></tr>
     <tr><td style="padding:16px 30px 26px;">
       <div style="border-top:1px solid #e3e9f0;padding-top:16px;font:400 13px/1.6 Arial,sans-serif;color:#5a6c80;">
         ¿Dudas o quieres apurar tu instalación? Escríbeme directo:<br>
+        <b style="color:#0a1b33;">Sebastián Cabrera</b> · <a href="{wa}" style="color:#3DAA57;text-decoration:none;">WhatsApp +56 9 4688 0196</a> · <a href="mailto:sebastian.cabrera@digitalseg.cl" style="color:#3DAA57;text-decoration:none;">sebastian.cabrera@digitalseg.cl</a>
+      </div>
+    </td></tr>
+  </table>
+  <div style="max-width:540px;font:400 11px/1.5 Arial,sans-serif;color:#9fb0c2;margin-top:14px;text-align:center;">SEGURIDAD DIGITAL SpA (DigitalSeg) · RUT 78.219.543-3 · Valle del Aconcagua, Chile</div>
+</td></tr></table>
+</body></html>"""
+
+
+def _build_portal_acceso_html(cliente: str, producto: str = "", garantia_txt: str = "",
+                              portal_url: str = "https://portal.digitalseg.cl") -> str:
+    """Correo de ACCESO AL PORTAL (invitación desde el CRM). A diferencia del correo de
+    compra, NO muestra precio ni 'pago confirmado': es el acceso a garantía + manuales +
+    soporte + beneficios. Muestra el producto y su garantía SOLO si se conocen."""
+    primer = (str(cliente or "").strip().split(" ") or [""])[0]
+    nombre = escape(primer) if primer else "¡Hola!"
+    prod = escape(str(producto or "").strip())
+    wa = "https://wa.me/56946880196?text=Hola%2C+una+consulta+sobre+mi+cerradura+DigitalSeg"
+    # Bloque del producto + garantía (solo si tenemos el producto real).
+    prod_box = ""
+    if prod:
+        gar_line = (f'<div style="font:700 13px/1.4 Arial,sans-serif;color:#2f8847;margin-top:6px;">'
+                    f'🛡️ Garantía 12 meses{(" · vence " + escape(garantia_txt)) if garantia_txt else ""}</div>') if True else ""
+        prod_box = f"""
+    <tr><td style="padding:20px 30px 4px;">
+      <div style="background:#f4f9f4;border:1px solid #d6ecd6;border-radius:12px;padding:18px 20px;">
+        <div style="font:700 12px/1 Arial,sans-serif;color:#2f8847;letter-spacing:.5px;text-transform:uppercase;">Tu producto</div>
+        <div style="font:800 17px/1.4 Arial,sans-serif;color:#0a1b33;margin-top:8px;">{prod}</div>
+        {gar_line}
+      </div>
+    </td></tr>"""
+    return f"""\
+<!doctype html><html lang="es"><body style="margin:0;background:#eef2f7;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef2f7;padding:26px 12px;"><tr><td align="center">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:540px;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 6px 24px rgba(10,27,51,.12);">
+    <tr><td style="background:#0a1b33;padding:26px 30px;">
+      <div style="color:#7fb5e6;font:800 12px/1 Arial,sans-serif;letter-spacing:2px;text-transform:uppercase;">DigitalSeg · Tu portal</div>
+      <div style="color:#ffffff;font:800 23px/1.3 Arial,sans-serif;margin-top:10px;">Hola {nombre} 👋</div>
+      <div style="color:#c9d6e5;font:400 15px/1.5 Arial,sans-serif;margin-top:6px;">Te dejamos listo tu <b style="color:#fff;">portal de cliente</b>: tu garantía, los manuales de tu cerradura y soporte cuando lo necesites — todo en un solo lugar.</div>
+    </td></tr>{prod_box}
+    <tr><td style="padding:18px 30px 4px;">
+      <div style="font:800 15px/1.3 Arial,sans-serif;color:#0a1b33;margin-bottom:12px;">En tu portal tienes 👇</div>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font:400 14px/1.55 Arial,sans-serif;color:#3a4d63;">
+        <tr><td style="padding:6px 0;">🛡️ <b>Tu garantía</b> de 12 meses, con la fecha de vencimiento a la vista.</td></tr>
+        <tr><td style="padding:6px 0;">📘 Los <b>manuales</b> de tu cerradura (huellas, claves, app).</td></tr>
+        <tr><td style="padding:6px 0;">🛟 <b>Soporte</b> directo si algo no anda.</td></tr>
+        <tr><td style="padding:6px 0;">🎁 Tu <b>cupón de 10%</b> para tu próxima compra y los beneficios del Club.</td></tr>
+      </table>
+    </td></tr>
+    <tr><td style="padding:18px 30px 6px;" align="center">
+      <a href="{escape(portal_url)}" style="display:inline-block;background:#0a1b33;color:#ffffff;text-decoration:none;font:800 15px/1 Arial,sans-serif;padding:15px 30px;border-radius:10px;">Entrar a mi portal →</a>
+      <div style="font:400 12px/1.5 Arial,sans-serif;color:#7a91a9;margin-top:10px;">Tu correo ya viene cargado: entras con un <b>código de acceso</b> que te llega por mail. Sin contraseñas que recordar.</div>
+    </td></tr>
+    <tr><td style="padding:16px 30px 26px;">
+      <div style="border-top:1px solid #e3e9f0;padding-top:16px;font:400 13px/1.6 Arial,sans-serif;color:#5a6c80;">
+        ¿Alguna duda? Escríbeme directo:<br>
         <b style="color:#0a1b33;">Sebastián Cabrera</b> · <a href="{wa}" style="color:#3DAA57;text-decoration:none;">WhatsApp +56 9 4688 0196</a> · <a href="mailto:sebastian.cabrera@digitalseg.cl" style="color:#3DAA57;text-decoration:none;">sebastian.cabrera@digitalseg.cl</a>
       </div>
     </td></tr>
@@ -2228,6 +2312,180 @@ async def enviar_cotizacion_correo(
     return {"ok": True, "email": email}
 
 
+@app.post("/api/portal/invitar")
+async def invitar_portal(
+    request: Request,
+    x_sb_token: Optional[str] = Header(default=None),
+) -> dict:
+    """Desde el CRM (Core): registra al cliente en el PORTAL (Mi compra + garantía)
+    y en el CLUB (cupón/puntos), y le envía por correo su ACCESO AL PORTAL con el
+    enlace, para que entre con su información ya cargada. Autenticado con la sesión
+    del CRM (X-Sb-Token). Idempotente por cliente (no duplica al reenviar)."""
+    await _verify_crm_user(x_sb_token or "")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON inválido")
+    email = str(body.get("email") or "").strip().lower()
+    nombre = str(body.get("nombre") or "").strip()
+    producto_raw = str(body.get("producto") or "").strip()
+    producto = producto_raw or "tu cerradura inteligente DigitalSeg"
+    serie = str(body.get("serie") or "").strip()
+    cot_slug = str(body.get("cot_slug") or "").strip() or None
+    try:
+        monto = int(float(body.get("monto") or 0))
+    except Exception:
+        monto = 0
+    if "@" not in email:
+        raise HTTPException(status_code=400, detail="Correo inválido")
+    ref = f"portal-invite-{email}"   # idempotente por cliente
+
+    # 1) Registrar la COMPRA en el portal (Mi compra + garantía) SOLO si conocemos el
+    #    producto real (o viene una cotización). Sin producto no creamos una compra
+    #    falsa en $0 — el cliente igual entra y ve su Club/cupón. Idempotente por ref.
+    if producto_raw or cot_slug:
+        try:
+            await _supa_rpc("portal_registrar_compra", {
+                "p_secret":     os.getenv("PORTAL_COMPRA_SECRET", ""),
+                "p_email":      email,
+                "p_cliente":    nombre or "",
+                "p_producto":   producto,
+                "p_monto":      monto,
+                "p_payment_id": ref,
+                "p_cot_slug":   cot_slug,
+            })
+        except Exception as exc:
+            log.error("Portal invitar: registrar_compra falló: %s", exc)
+
+    # 2) Registrarlo en el club (para su cupón 10% / puntos).
+    try:
+        await _supa_rpc("club_registrar", {"p_email": email, "p_nombre": nombre or None, "p_telefono": None})
+    except Exception as exc:
+        log.error("Portal invitar: club_registrar falló: %s", exc)
+
+    # 3) Enviarle el correo con el acceso al portal (garantía/manuales/soporte/club).
+    #    Deep-link con el correo (y nombre) pre-cargados → el cliente entra sin escribir
+    #    su correo: solo pide su código de acceso (passwordless / magic-code). Si viene
+    #    la cotización, también la abre.
+    from urllib.parse import urlencode
+    from datetime import date
+    _q = {"email": email}
+    if nombre:
+        _q["nombre"] = nombre
+    if cot_slug:
+        _q["cot"] = cot_slug
+    portal_url = "https://portal.digitalseg.cl/?" + urlencode(_q)
+    # Fecha de vencimiento de la garantía (hoy + 12 meses) para mostrarla en el correo.
+    gar_txt = ""
+    if producto_raw:
+        _t = date.today()
+        try:
+            _v = _t.replace(year=_t.year + 1)
+        except ValueError:
+            _v = _t.replace(year=_t.year + 1, day=28)
+        gar_txt = _v.strftime("%d-%m-%Y")
+    html = _build_portal_acceso_html(nombre or "", producto_raw, gar_txt, portal_url)
+    try:
+        _send_email(
+            subject="Tu portal DigitalSeg: garantía, manuales y beneficios 🔐",
+            html=html,
+            to_addresses=[email],
+        )
+    except Exception as e:
+        log.error("Portal invitar: envío de correo falló: %s", e)
+        raise HTTPException(status_code=502, detail="No se pudo enviar el correo")
+    log.info("Portal invitación enviada a %s", email)
+    return {"ok": True, "email": email}
+
+
+def _build_codigo_html(codigo: str) -> str:
+    """Correo con el CÓDIGO de acceso al portal (6 dígitos). Sobrio y de marca."""
+    c = escape(str(codigo or ""))
+    return f"""\
+<!doctype html><html lang="es"><body style="margin:0;background:#eef2f7;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef2f7;padding:28px 12px;"><tr><td align="center">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:460px;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 6px 24px rgba(10,27,51,.12);">
+    <tr><td style="background:#0a1b33;padding:24px 30px;">
+      <div style="color:#7fb5e6;font:800 12px/1 Arial,sans-serif;letter-spacing:2px;text-transform:uppercase;">DigitalSeg · Portal</div>
+      <div style="color:#ffffff;font:800 21px/1.3 Arial,sans-serif;margin-top:8px;">Tu código de acceso</div>
+    </td></tr>
+    <tr><td style="padding:26px 30px 8px;" align="center">
+      <div style="font:700 40px/1 Arial,sans-serif;letter-spacing:10px;color:#0a1b33;background:#f4f9f4;border:1px solid #d6ecd6;border-radius:12px;padding:18px 10px 16px;">{c}</div>
+      <div style="font:400 13px/1.6 Arial,sans-serif;color:#5a6c80;margin-top:16px;">Escríbelo en el portal para entrar a tu garantía, manuales y beneficios.<br>Vence en unos minutos. Si no lo pediste, ignora este correo.</div>
+    </td></tr>
+    <tr><td style="padding:10px 30px 26px;">
+      <div style="border-top:1px solid #e3e9f0;padding-top:14px;font:400 12px/1.6 Arial,sans-serif;color:#7a91a9;">
+        ¿Problemas para entrar? Escríbenos: <a href="https://wa.me/56946880196" style="color:#3DAA57;text-decoration:none;">WhatsApp +56 9 4688 0196</a>
+      </div>
+    </td></tr>
+  </table>
+  <div style="max-width:460px;font:400 11px/1.5 Arial,sans-serif;color:#9fb0c2;margin-top:14px;text-align:center;">SEGURIDAD DIGITAL SpA (DigitalSeg) · Valle del Aconcagua, Chile</div>
+</td></tr></table>
+</body></html>"""
+
+
+@app.post("/api/portal/codigo")
+async def portal_codigo(request: Request) -> dict:
+    """Envía el CÓDIGO de acceso al portal por NUESTRO Resend (fallback para cuando el
+    SMTP de Supabase Auth falla con 'Error sending magic link email'). Genera el OTP con
+    la Admin API (service_role, SOLO en el server) y lo manda por correo; el navegador
+    luego lo verifica con sb.auth.verifyOtp(type:'email'). Sin service_role → 503."""
+    if not _DS_SUPA_SERVICE:
+        raise HTTPException(status_code=503, detail="Login por correo no disponible ahora. Escríbenos por WhatsApp.")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON inválido")
+    email = str(body.get("email") or "").strip().lower()
+    if "@" not in email or len(email) > 200:
+        raise HTTPException(status_code=400, detail="Correo inválido")
+    now = datetime.utcnow()
+    last = _OTP_LAST_SENT.get(email)
+    if last and (now - last).total_seconds() < 45:
+        raise HTTPException(status_code=429, detail="Espera unos segundos antes de pedir otro código.")
+    headers = {
+        "apikey": _DS_SUPA_SERVICE,
+        "Authorization": f"Bearer {_DS_SUPA_SERVICE}",
+        "Content-Type": "application/json",
+    }
+    otp = None
+    async with httpx.AsyncClient(timeout=12) as client:
+        r = await client.post(
+            f"{_DS_SUPA_URL}/auth/v1/admin/generate_link",
+            headers=headers, json={"type": "magiclink", "email": email},
+        )
+        if r.status_code >= 400:
+            # El usuario no existe todavía → crearlo (autoconfirmado) y reintentar.
+            await client.post(
+                f"{_DS_SUPA_URL}/auth/v1/admin/users",
+                headers=headers, json={"email": email, "email_confirm": True},
+            )
+            r = await client.post(
+                f"{_DS_SUPA_URL}/auth/v1/admin/generate_link",
+                headers=headers, json={"type": "magiclink", "email": email},
+            )
+        if r.status_code >= 400:
+            log.error("portal/codigo generate_link %s %s", r.status_code, r.text[:200])
+            raise HTTPException(status_code=502, detail="No se pudo generar el código")
+        data = r.json()
+        props = data.get("properties") or {}
+        otp = props.get("email_otp") or data.get("email_otp")
+    if not otp:
+        raise HTTPException(status_code=502, detail="No se pudo generar el código")
+    try:
+        _send_email(
+            subject="Tu código de acceso · Portal DigitalSeg",
+            html=_build_codigo_html(otp),
+            to_addresses=[email],
+        )
+    except Exception as e:
+        log.error("portal/codigo envío falló: %s", e)
+        raise HTTPException(status_code=502, detail="No se pudo enviar el código")
+    _OTP_LAST_SENT[email] = now
+    log.info("portal/codigo enviado a %s", email)
+    return {"ok": True}
+
+
 @app.get("/api/_selftest-envio")
 async def _selftest_envio(to: str = "fravillalo@gmail.com", c: str = "demo-prueba") -> dict:
     """Prueba de entrega del correo de propuesta (con pixel). SOLO envía a una
@@ -2321,6 +2579,328 @@ _SOPORTE_SYSTEM = (
 )
 _IA_FALLBACK = "No pude responder ahora. Escríbele a Sebastián al WhatsApp +56 9 4688 0196 😊"
 _ia_rate: dict = defaultdict(list)
+
+
+# ══════════════════ ÓRDENES DE COMPRA (Zentral Core · compras) ══════════════════
+#  Flujo "cotización que nos llega del proveedor -> orden de compra":
+#    1) /api/oc/extraer : PDF del proveedor -> Claude lee las líneas -> JSON
+#    2) /api/oc/enviar  : la OC ya emitida  -> correo al proveedor (Resend)
+#  Ambos exigen sesión del CRM (X-Sb-Token + allowlist), igual que /api/cotizacion/enviar.
+
+_oc_rate: dict = defaultdict(list)
+
+# Modelo DEDICADO y sin cadena de fallback, a propósito: aquí se leen NÚMEROS que se
+# convierten en una orden de compra. El patrón de visión cae a ANTHROPIC_MODEL -> Haiku,
+# y si esa var quedara seteada en Railway para las fotos de puertas, la extracción
+# correría en un modelo débil. Cuesta ~2 centavos por PDF.
+_OC_MODEL = os.getenv("ANTHROPIC_OC_MODEL", "claude-opus-4-8").strip() or "claude-opus-4-8"
+
+_OC_SYSTEM = (
+    "Eres un asistente que extrae las líneas de una COTIZACIÓN DE PROVEEDOR chilena "
+    "(un proveedor nos cotiza a nosotros) para convertirla en una orden de compra.\n\n"
+    "REGLAS:\n"
+    "- Extrae SOLO lo que está escrito en el documento. Jamás inventes ni estimes.\n"
+    "- Precios en PESOS CHILENOS, como entero, SIN puntos ni símbolo ($45.000 -> 45000).\n"
+    "- precio_unitario es el precio POR UNIDAD, neto (sin IVA). Si el documento solo trae "
+    "el total de la línea, divídelo por la cantidad.\n"
+    "- Si el documento dice explícitamente que los precios incluyen IVA, marca iva_incluido=true.\n"
+    "- Si un dato no aparece, usa null (texto) o 0 (número). No adivines.\n"
+    "- notas: todo lo que el humano deba revisar (descuentos, condiciones de pago, plazos "
+    "de entrega, cantidades ambiguas, letra ilegible)."
+)
+
+# OJO: json_schema NO soporta minimum/maxLength -> cantidades y precios se validan en el
+# servidor (_oc_sanea_items).
+_OC_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "proveedor": {"type": "string", "description": "Razón social o nombre del proveedor que cotiza"},
+        "rut": {"type": ["string", "null"], "description": "RUT del proveedor, formato 12.345.678-9"},
+        "email": {"type": ["string", "null"], "description": "Email de contacto del proveedor"},
+        "contacto": {"type": ["string", "null"], "description": "Nombre de la persona de contacto"},
+        "folio": {"type": ["string", "null"], "description": "N° de la cotización del proveedor"},
+        "fecha": {"type": ["string", "null"], "description": "Fecha de la cotización, formato YYYY-MM-DD"},
+        "moneda": {"type": "string", "enum": ["CLP", "USD", "UF", "OTRA"]},
+        "iva_incluido": {"type": "boolean", "description": "true si los precios ya incluyen IVA"},
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "nombre": {"type": "string"},
+                    "cantidad": {"type": "number"},
+                    "precio_unitario": {"type": "number"},
+                },
+                "required": ["nombre", "cantidad", "precio_unitario"],
+                "additionalProperties": False,
+            },
+        },
+        "notas": {"type": ["string", "null"], "description": "Lo que el humano debe revisar"},
+    },
+    "required": ["proveedor", "moneda", "iva_incluido", "items"],
+    "additionalProperties": False,
+}
+
+
+def _oc_sanea_items(items: list) -> list:
+    """Valida en el servidor lo que el json_schema no puede expresar (minimum, etc.).
+    Descarta líneas sin nombre o con cantidad <= 0; nunca deja precios negativos."""
+    out = []
+    for it in (items or [])[:200]:
+        if not isinstance(it, dict):
+            continue
+        nombre = str(it.get("nombre") or "").strip()[:200]
+        try:
+            cantidad = float(it.get("cantidad") or 0)
+            precio = float(it.get("precio_unitario") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not nombre or cantidad <= 0 or precio < 0:
+            continue
+        out.append({
+            "nombre": nombre,
+            "cantidad": round(cantidad, 2),
+            "precio_unitario": round(precio),
+        })
+    return out
+
+
+@app.post("/api/oc/extraer")
+async def oc_extraer(
+    request: Request,
+    x_sb_token: Optional[str] = Header(default=None),
+) -> dict:
+    """Lee el PDF de la cotización que nos mandó un proveedor y devuelve sus líneas
+    estructuradas, para que el CRM las muestre y el humano las REVISE antes de emitir
+    la OC. No guarda nada: solo lee y devuelve."""
+    await _verify_crm_user(x_sb_token or "")
+
+    # Rate limit: 12 PDF por IP cada 10 min (la extracción es cara)
+    ip = (request.client.host if request.client else "?") or "?"
+    now = datetime.now().timestamp()
+    _oc_rate[ip] = [t for t in _oc_rate[ip] if now - t < 600]
+    if len(_oc_rate[ip]) >= 12:
+        return {"ok": False, "error": "rate",
+                "reply": "Demasiados PDF seguidos. Espera unos minutos o carga las líneas a mano."}
+    _oc_rate[ip].append(now)
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON inválido")
+
+    pdf = str(body.get("pdf_base64") or "").strip()
+    if pdf.startswith("data:") and "," in pdf:       # viene como data: URI del navegador
+        pdf = pdf.split(",", 1)[1]
+    pdf = "".join(pdf.split())                       # base64 sin saltos de línea
+    if not pdf or len(pdf) < 100:
+        raise HTTPException(status_code=400, detail="Falta el PDF")
+    if len(pdf) > 9_500_000:                         # ~7 MB de PDF
+        return {"ok": False, "error": "size",
+                "reply": "El PDF es muy pesado (máx ~7 MB). Comprímelo o carga las líneas a mano."}
+
+    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        return {"ok": False, "error": "nokey",
+                "reply": "La lectura con IA no está disponible ahora. Carga las líneas a mano."}
+
+    payload = {
+        "model": _OC_MODEL,
+        "max_tokens": 8000,
+        "system": _OC_SYSTEM,
+        # effort low: es extracción de un documento corto, no razonamiento.
+        # NO pasar temperature: da 400 en Opus 4.8.
+        "output_config": {"effort": "low", "format": {"type": "json_schema", "schema": _OC_SCHEMA}},
+        "messages": [{
+            "role": "user",
+            "content": [
+                # El documento va ANTES del texto.
+                {"type": "document", "source": {
+                    "type": "base64", "media_type": "application/pdf", "data": pdf}},
+                {"type": "text", "text": "Extrae las líneas de esta cotización de proveedor."},
+            ],
+        }],
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            r = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "content-type": "application/json",
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                },
+                json=payload,
+            )
+        if r.status_code != 200:
+            log.error("Anthropic OC extraer %s: %s", r.status_code, r.text[:300])
+            return {"ok": False, "error": "ia",
+                    "reply": "No pude leer el PDF ahora. Carga las líneas a mano."}
+        data = r.json()
+
+        # stop_reason ANTES de parsear: max_tokens deja el JSON truncado igual.
+        stop = data.get("stop_reason")
+        if stop == "refusal":
+            return {"ok": False, "error": "refusal",
+                    "reply": "La IA no pudo procesar este documento. Carga las líneas a mano."}
+        if stop == "max_tokens":
+            return {"ok": False, "error": "truncado",
+                    "reply": "La cotización es muy larga y quedó cortada. Carga las líneas a mano."}
+
+        text = next((b.get("text") or "" for b in (data.get("content") or [])
+                     if b.get("type") == "text"), "")
+        try:
+            out = json.loads(text)
+        except Exception:
+            log.error("OC extraer: JSON inválido: %s", text[:200])
+            return {"ok": False, "error": "parse",
+                    "reply": "No pude leer bien el PDF. Carga las líneas a mano."}
+
+        items = _oc_sanea_items(out.get("items") or [])
+        if not items:
+            return {"ok": False, "error": "vacio",
+                    "reply": "No encontré líneas de productos en este PDF. Revísalo o cárgalas a mano."}
+
+        moneda = out.get("moneda") or "CLP"
+        log.info("OC extraer: %s líneas de %s (%s)", len(items), out.get("proveedor") or "?", moneda)
+        return {
+            "ok": True,
+            "proveedor": (out.get("proveedor") or "").strip(),
+            "rut": out.get("rut") or "",
+            "email": out.get("email") or "",
+            "contacto": out.get("contacto") or "",
+            "folio": out.get("folio") or "",
+            "fecha": out.get("fecha") or "",
+            "moneda": moneda,
+            "iva_incluido": bool(out.get("iva_incluido")),
+            "items": items,
+            "notas": out.get("notas") or "",
+        }
+    except Exception as e:
+        log.error("oc-extraer: %s", e)
+        return {"ok": False, "error": "exc",
+                "reply": "Hubo un problema leyendo el PDF. Carga las líneas a mano."}
+
+
+def _build_oc_html(oc: dict) -> str:
+    """La orden de compra como tabla HTML en el cuerpo del correo.
+    Sin link ni pixel de rastreo: que un proveedor 'abra' la OC no es señal de venta."""
+    num = escape(str(oc.get("num") or ""))
+    prov = escape(str(oc.get("proveedor") or ""))
+    contacto = escape(str(oc.get("contacto") or "")) or prov
+    fecha = escape(str(oc.get("fecha") or ""))
+    notas = escape(str(oc.get("notas") or ""))
+    plazo = escape(str(oc.get("plazo") or ""))
+
+    filas, neto = [], 0
+    for it in (oc.get("items") or []):
+        nom = escape(str(it.get("nombre") or ""))
+        qty = float(it.get("qty") or 0)
+        pu = float(it.get("precio") or 0)
+        sub = round(qty * pu)
+        neto += sub
+        qty_txt = str(int(qty)) if qty.is_integer() else f"{qty:.2f}"
+        td = "padding:10px 8px;border-bottom:1px solid #e5e7eb;"
+        filas.append(
+            f'<tr><td style="{td}color:#111827;">{nom}</td>'
+            f'<td style="{td}text-align:center;color:#374151;">{qty_txt}</td>'
+            f'<td style="{td}text-align:right;color:#374151;">{_clp(pu)}</td>'
+            f'<td style="{td}text-align:right;color:#111827;font-weight:700;">{_clp(sub)}</td></tr>'
+        )
+
+    iva = round(neto * 0.19)
+    tot = (
+        f'<tr><td colspan="3" style="padding:6px 8px;text-align:right;color:#6b7280;">Neto</td>'
+        f'<td style="padding:6px 8px;text-align:right;color:#374151;">{_clp(neto)}</td></tr>'
+        f'<tr><td colspan="3" style="padding:6px 8px;text-align:right;color:#6b7280;">IVA 19%</td>'
+        f'<td style="padding:6px 8px;text-align:right;color:#374151;">{_clp(iva)}</td></tr>'
+        f'<tr><td colspan="3" style="padding:10px 8px;text-align:right;color:#111827;font-weight:800;'
+        f'border-top:2px solid #111827;">TOTAL</td>'
+        f'<td style="padding:10px 8px;text-align:right;color:#111827;font-weight:800;font-size:17px;'
+        f'border-top:2px solid #111827;">{_clp(neto + iva)}</td></tr>'
+    )
+
+    notas_html = (
+        f'<p style="margin:18px 0 0;padding:12px 14px;background:#f9fafb;border-left:3px solid #3C82C6;'
+        f'color:#374151;font:400 14px/1.6 Arial,sans-serif;"><b>Observaciones:</b><br>{notas}</p>'
+    ) if notas else ""
+    plazo_html = (
+        f'<tr><td style="padding:3px 24px 3px 0;color:#6b7280;">Plazo de entrega</td>'
+        f'<td style="padding:3px 0;color:#111827;font-weight:700;">{plazo}</td></tr>'
+    ) if plazo else ""
+    th = "padding:10px 8px;color:#6b7280;font-size:12px;letter-spacing:.5px;border-bottom:2px solid #e5e7eb;"
+
+    return f"""\
+<!doctype html><html lang="es"><body style="margin:0;padding:0;background:#f3f4f6;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:28px 12px;">
+<tr><td align="center">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:640px;background:#ffffff;border-radius:14px;overflow:hidden;border:1px solid #e5e7eb;">
+    <tr><td style="padding:24px 28px 20px;text-align:center;border-bottom:3px solid #3FA83C;">
+      <div style="font-family:Arial,Helvetica,sans-serif;font-weight:800;font-size:24px;letter-spacing:1px;line-height:1;color:#3C82C6;">DIGITAL<span style="color:#3FA83C;">SEG</span></div>
+      <div style="font-family:Arial,Helvetica,sans-serif;font-size:9.5px;font-weight:700;letter-spacing:2.5px;line-height:1;margin-top:8px;"><span style="color:#3C82C6;">SEGURIDAD</span> <span style="color:#3FA83C;">INTELIGENTE</span></div>
+    </td></tr>
+    <tr><td style="padding:26px 28px 8px;">
+      <div style="color:#111827;font:800 21px/1.3 Arial,sans-serif;">Orden de compra {num}</div>
+      <p style="margin:14px 0 0;color:#374151;font:400 15px/1.65 Arial,sans-serif;">Hola {contacto}, te enviamos nuestra orden de compra. Por favor confírmanos <b>respondiendo este correo</b>.</p>
+      <table role="presentation" cellpadding="0" cellspacing="0" style="margin:18px 0 0;font:400 14px Arial,sans-serif;">
+        <tr><td style="padding:3px 24px 3px 0;color:#6b7280;">Proveedor</td><td style="padding:3px 0;color:#111827;font-weight:700;">{prov}</td></tr>
+        <tr><td style="padding:3px 24px 3px 0;color:#6b7280;">Fecha</td><td style="padding:3px 0;color:#111827;font-weight:700;">{fecha}</td></tr>
+        {plazo_html}
+      </table>
+    </td></tr>
+    <tr><td style="padding:18px 28px 4px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font:400 14px Arial,sans-serif;">
+        <thead><tr style="background:#f9fafb;">
+          <th align="left" style="{th}">PRODUCTO</th><th align="center" style="{th}">CANT.</th>
+          <th align="right" style="{th}">P. UNIT.</th><th align="right" style="{th}">SUBTOTAL</th>
+        </tr></thead>
+        <tbody>{''.join(filas)}</tbody>
+        <tfoot>{tot}</tfoot>
+      </table>
+      {notas_html}
+    </td></tr>
+    <tr><td style="padding:22px 28px;border-top:1px solid #e5e7eb;color:#6b7280;font:400 13px/1.6 Arial,sans-serif;">
+      <b style="color:#374151;">Digitalseg</b> · Valle de Aconcagua<br>
+      Consultas: <a href="https://wa.me/56946880196" style="color:#3FA83C;">+56 9 4688 0196</a> · sebastian.cabrera@digitalseg.cl
+    </td></tr>
+  </table>
+</td></tr></table>
+</body></html>"""
+
+
+@app.post("/api/oc/enviar")
+async def enviar_oc_correo(
+    request: Request,
+    x_sb_token: Optional[str] = Header(default=None),
+) -> dict:
+    """Envía la orden de compra al proveedor por correo (tabla HTML en el cuerpo).
+    Autenticado con la sesión del CRM (X-Sb-Token), igual que /api/cotizacion/enviar."""
+    await _verify_crm_user(x_sb_token or "")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON inválido")
+
+    email = str(body.get("email") or "").strip()
+    oc = body.get("oc") or {}
+    if "@" not in email:
+        raise HTTPException(status_code=400, detail="Falta el email del proveedor")
+    if not isinstance(oc, dict) or not (oc.get("items") or []):
+        raise HTTPException(status_code=400, detail="La orden de compra viene sin líneas")
+
+    num = str(oc.get("num") or "").strip()
+    try:
+        _send_email(
+            subject=f"Orden de compra {num} · DigitalSeg".strip(),
+            html=_build_oc_html(oc),
+            to_addresses=[email],
+        )
+    except Exception as e:
+        log.error("Envío de OC por correo falló: %s", e)
+        raise HTTPException(status_code=502, detail="No se pudo enviar el correo")
+    log.info("OC %s enviada por correo a %s", num or "?", email)
+    return {"ok": True, "email": email}
 
 
 @app.post("/api/soporte-ia")
