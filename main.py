@@ -372,6 +372,64 @@ async def security_headers(request: Request, call_next):
     return response
 
 
+# ── Lead SIN match del cotizador (H1) ────────────────────────────────────────────
+def _build_lead_sin_match_html(c, req, phone: str) -> str:
+    feats = ", ".join(req.features or []) or "—"
+    return f"""<div style="font-family:system-ui,Arial,sans-serif;max-width:560px">
+      <h2 style="color:#0a1b33;margin:0 0 6px">🔔 Lead web SIN match del cotizador</h2>
+      <p style="color:#b9770e;margin:0 0 12px">El cotizador no encontró un producto compatible automáticamente (probable puerta de vidrio, grosor fuera de rango o perfil de aluminio). <b>Contactar y cotizar a mano.</b></p>
+      <table style="border-collapse:collapse;font-size:14px;color:#0a1b33">
+        <tr><td style="padding:3px 12px 3px 0;color:#666">Cliente</td><td><b>{_safe_text(c.nombre)}</b></td></tr>
+        <tr><td style="padding:3px 12px 3px 0;color:#666">Teléfono</td><td>{_safe_text(phone)}</td></tr>
+        <tr><td style="padding:3px 12px 3px 0;color:#666">Email</td><td>{_safe_text(c.email or '—')}</td></tr>
+        <tr><td style="padding:3px 12px 3px 0;color:#666">Espacio</td><td>{_safe_text(req.space)}</td></tr>
+        <tr><td style="padding:3px 12px 3px 0;color:#666">Puerta</td><td>{_safe_text(req.doorType)}</td></tr>
+        <tr><td style="padding:3px 12px 3px 0;color:#666">Grosor</td><td>{req.thickness or '—'} mm</td></tr>
+        <tr><td style="padding:3px 12px 3px 0;color:#666">Quiere</td><td>{_safe_text(feats)}</td></tr>
+      </table>
+      <p style="margin:14px 0 0"><a href="{_CRM_URL}" style="background:#3DAA57;color:#fff;padding:9px 16px;border-radius:8px;text-decoration:none">Ver en el CRM</a></p>
+    </div>"""
+
+
+async def _registrar_lead_sin_match(c, req, phone: str, source: str) -> LeadResponse:
+    """H1: captura un lead del cotizador que NO tuvo match de producto. Lo mete al
+    Pipeline del CRM (lead_landing_registrar) y avisa al equipo, en vez de botarlo (422)."""
+    feats = ", ".join(req.features or [])
+    nota = f"Cotizador sin match · Espacio: {req.space} · Puerta: {req.doorType}"
+    if req.thickness:   nota += f" · grosor {req.thickness}mm"
+    if req.instalacion: nota += f" · instalación {req.instalacion}"
+    if feats:           nota += f" · quiere: {feats}"
+    try:
+        r = await _supa_rpc("lead_landing_registrar", {
+            "p_secret":   _COT_LANDING_SECRET,
+            "p_nombre":   c.nombre,
+            "p_email":    c.email or "",
+            "p_telefono": phone or "",
+            "p_origen":   "Cotizador web (sin match)",
+            "p_nota":     nota,
+        })
+        if r.status_code == 200:
+            log.info("Lead SIN match registrado en el CRM: %s (%s)", c.nombre, phone)
+        else:
+            log.error("lead_landing_registrar (sin match) %s: %s", r.status_code, r.text[:200])
+    except Exception as e:
+        log.error("lead_landing_registrar (sin match) falló: %s", e)
+    # Aviso al equipo SIEMPRE (aunque la RPC falle → nunca perder el lead).
+    try:
+        _send_email(
+            subject=f"🔔 Lead web SIN match: {c.nombre} — {phone}",
+            html=_build_lead_sin_match_html(c, req, phone),
+            to_addresses=list(_INFORME_RECIPIENTS),
+        )
+    except Exception as e:
+        log.error("Aviso equipo (lead sin match) falló: %s", e)
+    return LeadResponse(
+        ok=True,
+        odoo_lead_url=_CRM_URL,
+        message="Recibimos tu solicitud. Un asesor te contactará para cotizar tu caso a medida.",
+    )
+
+
 # ── POST /api/leads ─────────────────────────────────────────────────────────────
 
 @app.post("/api/leads", response_model=LeadResponse)
@@ -387,6 +445,12 @@ async def create_lead(payload: LeadPayload, request: Request) -> LeadResponse:
 
     phone    = c.telefono
     quantity = int(c.cantidad) if c.cantidad.isdigit() else 1
+
+    # H1 (25-jul-2026): sin producto compatible, 'recommendation' viene null. ANTES el
+    # modelo lo rechazaba con 422 y el lead se PERDÍA en silencio (sin CRM, correo ni
+    # WhatsApp). Ahora lo registramos igual en el Pipeline y avisamos al equipo.
+    if rec is None:
+        return await _registrar_lead_sin_match(c, req, phone, payload.source)
 
     log.info("Lead (web→CRM): %s | SKU: %s | formal: %s", c.nombre, rec.sku, c.cotizacionFormal)
 

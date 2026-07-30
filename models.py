@@ -61,7 +61,9 @@ class LeadPayload(BaseModel):
     name: str
     phone: str
     requirements: Requirements
-    recommendation: Recommendation
+    # H1: el cotizador puede NO encontrar producto compatible (vidrio, grosor raro,
+    # aluminio grueso). En ese caso llega null; NO se bota el lead (ver create_lead).
+    recommendation: Optional[Recommendation] = None
     customer: Customer
 
 
