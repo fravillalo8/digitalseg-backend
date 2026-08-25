@@ -407,6 +407,7 @@ async def _registrar_lead_sin_match(c, req, phone: str, source: str) -> LeadResp
             "p_telefono": phone or "",
             "p_origen":   "Cotizador web (sin match)",
             "p_nota":     nota,
+            "p_ciudad":   c.ciudad or "",
         })
         if r.status_code == 200:
             log.info("Lead SIN match registrado en el CRM: %s (%s)", c.nombre, phone)
@@ -479,6 +480,7 @@ async def create_lead(payload: LeadPayload, request: Request) -> LeadResponse:
             "p_estado":       "enviada",
             "p_telefono":     phone or "",
             "p_email":        c.email or "",
+            "p_ciudad":       c.ciudad or "",
             "p_add_pipeline": True,
         })
         if r.status_code == 200:
