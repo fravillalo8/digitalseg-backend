@@ -28,6 +28,9 @@ log = logging.getLogger("conta")
 
 _OWNER_UID_DEFAULT = "167fefde-614d-439d-a926-ebae74f1e352"  # francisco.villalobos@digitalseg.cl
 _CAT_COMISION = "Comisiones de pago (MercadoPago)"
+# Categoría del INGRESO por venta MP. Debe existir en CONTA_CONFIG.categorias.ingreso
+# de conta-config.js (Digitalseg = "Venta de cerraduras / equipos"). Configurable por env.
+_CAT_INGRESO = os.getenv("CONTA_INGRESO_CAT", "Venta de cerraduras / equipos")
 
 
 class ContaClient:
@@ -109,11 +112,12 @@ class ContaClient:
                 empresa_id = empresas[0]["id"] if empresas and empresas[0].get("id") else ""
 
                 movs = await self._get_collection(client, "movimientos")
-                if any(str(m.get("paymentId", "")) == payment_id for m in movs):
+                mov_id = f"mov_mp_com_{payment_id}"
+                if any(str(m.get("id", "")) == mov_id for m in movs):
                     return {"ok": True, "dedup": True, "payment_id": payment_id}
 
                 mov = {
-                    "id": f"mov_mp_{payment_id}",
+                    "id": mov_id,
                     "empresaId": empresa_id,
                     "tipo": "egreso",
                     "fecha": fecha,
@@ -143,3 +147,77 @@ class ContaClient:
 
         log.info("Conta: comisión MP registrada pago=%s comisión=%d neto_recibido=%s", payment_id, comision, neto_recibido)
         return {"ok": True, "payment_id": payment_id, "comision": comision}
+
+    # ── Registro del INGRESO por venta de MercadoPago ─────────────────────────
+    async def registrar_ingreso_mp(self, payment: dict) -> dict:
+        """Agrega un INGRESO con el monto de la venta del pago aprobado.
+        Idempotente por id (mov_mp_ing_<payment_id>). El srcId se deriva del num
+        del documento del Core (crm:doc:MP-<payment_id>) para que, si el CRM
+        espeja ese documento a Conta, su dedup por srcId evite el doble ingreso."""
+        if not self.configured:
+            return {"skipped": True, "reason": "conta no configurado"}
+
+        payment_id = str(payment.get("id", ""))
+        if not payment_id:
+            return {"skipped": True, "reason": "sin payment id"}
+
+        total = round(float(payment.get("transaction_amount", 0) or 0))
+        if total <= 0:
+            return {"skipped": True, "reason": "monto 0"}
+
+        fecha = str(payment.get("date_approved") or payment.get("date_created") or "")[:10]
+        meta = payment.get("metadata") or {}
+        payer = payment.get("payer") or {}
+        es_pos = not (meta.get("cliente") or meta.get("lead_id"))
+        cliente = (
+            meta.get("cliente")
+            or (f"{payer.get('first_name','')} {payer.get('last_name','')}".strip())
+            or payer.get("email")
+            or ("Cliente Mercado Pago (POS)" if es_pos else "Cliente Mercado Pago")
+        )
+
+        # Venta afecta a IVA: separo neto/IVA del total (bruto).
+        neto = round(total / 1.19)
+        iva = total - neto
+
+        try:
+            async with httpx.AsyncClient() as client:
+                empresas = await self._get_collection(client, "empresas")
+                empresa_id = empresas[0]["id"] if empresas and empresas[0].get("id") else ""
+
+                movs = await self._get_collection(client, "movimientos")
+                mov_id = f"mov_mp_ing_{payment_id}"
+                if any(str(m.get("id", "")) == mov_id for m in movs):
+                    return {"ok": True, "dedup": True, "payment_id": payment_id}
+
+                mov = {
+                    "id": mov_id,
+                    "empresaId": empresa_id,
+                    "tipo": "ingreso",
+                    "fecha": fecha,
+                    "categoria": _CAT_INGRESO,
+                    "glosa": f"Venta MercadoPago pago #{payment_id}"
+                             + (" · POS" if es_pos else " · web"),
+                    "contraparte": cliente,
+                    "neto": neto,
+                    "iva": iva,
+                    "total": total,
+                    "afectoIva": True,
+                    "docTipo": "Boleta",
+                    "docFolio": f"MP-{payment_id}",
+                    "estado": "pagado",
+                    "origen": "mercadopago",
+                    "paymentId": payment_id,
+                    "srcId": f"crm:doc:MP-{payment_id}",
+                }
+                movs.insert(0, mov)
+                await self._upsert_collection(client, "movimientos", movs)
+        except httpx.HTTPStatusError as exc:
+            log.error("Conta ingreso MP HTTP %s: %s", exc.response.status_code, exc.response.text[:300])
+            return {"ok": False, "error": "http", "status": exc.response.status_code}
+        except Exception as exc:
+            log.error("Conta ingreso MP error: %s", exc)
+            return {"ok": False, "error": str(exc)}
+
+        log.info("Conta: ingreso MP registrado pago=%s total=%d", payment_id, total)
+        return {"ok": True, "payment_id": payment_id, "total": total}

@@ -40,6 +40,7 @@ from models import (
 from odoo_client import OdooClient
 from whatsapp_client import WhatsAppClient
 from conta_client import ContaClient
+from core_client import CoreClient
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 log = logging.getLogger(__name__)
@@ -102,6 +103,7 @@ def _verify_mp_signature(request: Request, data_id: str) -> bool:
 odoo: OdooClient
 wa: WhatsAppClient
 conta: ContaClient
+core: CoreClient
 
 # ── Agenda in-memory store ───────────────────────────────────────────────────
 # Se inicializa desde AGENDA_DATA_FILE si existe, o desde seed data.
@@ -169,10 +171,11 @@ def _fecha_hora_label(fecha: str, hora: int) -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    global odoo, wa, conta, _agenda_lock
+    global odoo, wa, conta, core, _agenda_lock
     odoo = OdooClient()
     wa   = WhatsAppClient()
     conta = ContaClient()
+    core = CoreClient()
     _agenda_lock = asyncio.Lock()
     _load_agenda()
     try:
@@ -1429,6 +1432,8 @@ async def pago_webhook(request: Request) -> dict:
     log.info("Pago %s: status=%s | cliente=***%s | ref=%s", payment_id, status, cliente[-3:] if cliente else "?", ext_ref)
 
     res_conta = None
+    res_ingreso = None
+    res_core = None
     if status == "approved":
         # Anti-replay: no repetir efectos secundarios de un pago ya procesado
         if payment_id in _processed_payments:
@@ -1445,6 +1450,24 @@ async def pago_webhook(request: Request) -> dict:
         except Exception as exc:
             log.warning("Conta comisión MP no registrada: %s", exc)
             res_conta = {"ok": False, "error": str(exc)}
+
+        # Ingreso en Conta (el MONTO de la venta, no solo la comisión). Idempotente.
+        res_ingreso = None
+        try:
+            res_ingreso = await conta.registrar_ingreso_mp(payment)
+            log.info("Conta ingreso MP: %s", res_ingreso)
+        except Exception as exc:
+            log.warning("Conta ingreso MP no registrado: %s", exc)
+            res_ingreso = {"ok": False, "error": str(exc)}
+
+        # Venta en el Core (Zentral CRM · documentos): aparece en Ventas/KPIs/Financiero. Idempotente.
+        res_core = None
+        try:
+            res_core = await core.registrar_venta_mp(payment)
+            log.info("Core venta MP: %s", res_core)
+        except Exception as exc:
+            log.warning("Core venta MP no registrada: %s", exc)
+            res_core = {"ok": False, "error": str(exc)}
 
         # Odoo: agregar nota de pago confirmado + intentar marcar como ganado
         if lead_id_raw:
@@ -1531,7 +1554,8 @@ async def pago_webhook(request: Request) -> dict:
         except Exception as exc:
             log.warning("Correo de bienvenida al cliente no enviado: %s", exc)
 
-    return {"ok": True, "payment_id": payment_id, "status": status, "conta": res_conta}
+    return {"ok": True, "payment_id": payment_id, "status": status,
+            "conta_comision": res_conta, "conta_ingreso": res_ingreso, "core_venta": res_core}
 
 
 # ── Email helpers ─────────────────────────────────────────────────────────────
