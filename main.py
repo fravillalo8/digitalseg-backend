@@ -1435,12 +1435,12 @@ async def pago_webhook(request: Request) -> dict:
     res_ingreso = None
     res_core = None
     if status == "approved":
-        # Anti-replay: no repetir efectos secundarios de un pago ya procesado
-        if payment_id in _processed_payments:
-            return {"ok": True, "payment_id": payment_id, "status": status, "dedup": True}
-        _processed_payments.add(payment_id)
-        if len(_processed_payments) > 5000:
-            _processed_payments.clear()
+        # Las 3 escrituras de DINERO (comisión/ingreso/venta) son idempotentes por su propia
+        # clave en la colección, así que reintentar es SEGURO y NO se gatean por el set en
+        # memoria (que antes bloqueaba la recuperación: marcaba el pago como procesado ANTES
+        # de escribir, y un reintento salía "dedup" sin rellenar la escritura que había fallado).
+        # El set en memoria solo evita repetir los efectos NO idempotentes (correos/WhatsApp/Odoo),
+        # más abajo, DESPUÉS de confirmar que el dinero quedó registrado.
 
         # Contabilidad (Zentral Conta): registrar la comisión REAL de MercadoPago como egreso.
         # Idempotente por paymentId en la propia colección → seguro ante reintentos/reinicios.
@@ -1468,6 +1468,24 @@ async def pago_webhook(request: Request) -> dict:
         except Exception as exc:
             log.warning("Core venta MP no registrada: %s", exc)
             res_core = {"ok": False, "error": str(exc)}
+
+        # Si alguna escritura de DINERO falló, responder 5xx para que MercadoPago REINTENTE.
+        # La idempotencia por colección rellena SOLO la que faltó, sin duplicar las que ya entraron.
+        # (Antes: siempre 200 → MP no reintenta → la venta se perdía en silencio.)
+        _fallos_mp = [n for n, r in (("conta_comision", res_conta), ("conta_ingreso", res_ingreso), ("core_venta", res_core))
+                      if isinstance(r, dict) and r.get("ok") is False]
+        if _fallos_mp:
+            log.error("Webhook MP pago=%s: escrituras fallidas %s → 502 (MP reintentará)", payment_id, _fallos_mp)
+            raise HTTPException(status_code=502, detail={"retry": _fallos_mp, "payment_id": payment_id})
+
+        # Efectos secundarios NO idempotentes (Odoo/WhatsApp/correos/portal): una sola vez por pago.
+        # Recién ahora que el dinero quedó registrado marcamos el pago como procesado.
+        if payment_id in _processed_payments:
+            return {"ok": True, "payment_id": payment_id, "status": status, "dedup_efectos": True,
+                    "conta_comision": res_conta, "conta_ingreso": res_ingreso, "core_venta": res_core}
+        _processed_payments.add(payment_id)
+        if len(_processed_payments) > 5000:
+            _processed_payments.clear()
 
         # Odoo: agregar nota de pago confirmado + intentar marcar como ganado
         if lead_id_raw:
