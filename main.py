@@ -359,7 +359,7 @@ def _build_landing_cot_data(c, rec, req, quantity: int, folio: str, slug: str,
                         "phoneDisplay": "+56 9 4688 0196", "whatsapp": "56946880196"},
         "items": items,
         "pago": {"contadoDiscountPct": 5, "cuotasCount": 3,
-                 "cuotasOptions": [3, 6], "facturaDisponible": True},
+                 "cuotasOptions": [3], "facturaDisponible": True},
         "sectors": {"modes": _map_sector_modes(req.space)},
     }
     list_price = sum(int(it["price"]) * int(it["qty"] or 1) for it in items)
@@ -618,7 +618,7 @@ def _build_vendor_cot_data(payload: VendorCotPayload, folio: str, slug: str,
                         "phoneDisplay": "+56 9 4688 0196", "whatsapp": "56946880196"},
         "items": items,
         "pago": {"contadoDiscountPct": max(0, min(5, int(round(payload.descuento_pct or 0)))),
-                 "cuotasCount": 3, "cuotasOptions": [3, 6], "facturaDisponible": True},
+                 "cuotasCount": 3, "cuotasOptions": [3], "facturaDisponible": True},
         "sectors": {"modes": _map_sector_modes(None)},
     }
     return data, list_price
@@ -673,7 +673,7 @@ def _build_vendor_client_html(payload: VendorCotPayload, list_price: int,
       <p style="margin:0 0 16px;">Esto fue lo que preparamos para ti, pensado en tu tranquilidad:</p>
       {cards}
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:8px 0 4px;font:400 14px Arial,sans-serif;">{tot_rows}</table>
-      <p style="margin:14px 0 20px;font-size:13px;color:#8a94a6;">🛡️ La instalación profesional va en la cotización (costo aparte) y es necesaria para la <b style="color:#c4ccd8;">garantía de 12 meses</b>. Hasta en 6 cuotas sin interés.</p>
+      <p style="margin:14px 0 20px;font-size:13px;color:#8a94a6;">🛡️ La instalación profesional va en la cotización (costo aparte) y es necesaria para la <b style="color:#c4ccd8;">garantía de 12 meses</b>. Hasta en 3 cuotas sin interés.</p>
       <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto 6px;"><tr><td style="border-radius:12px;background:#3DAA57;">
         <a href="{page_url}" style="display:inline-block;padding:15px 34px;color:#0f1115;font:700 16px Arial,sans-serif;text-decoration:none;border-radius:12px;">Ver mi propuesta completa &rarr;</a>
       </td></tr></table>
@@ -1313,11 +1313,11 @@ async def crear_pago(req: PagoRequest, request: Request) -> PagoResponse:
         },
         "auto_return": "approved",
         "statement_descriptor": "DIGITALSEG",
-        # Tope de 6 cuotas para alinear el checkout con la oferta "3 y 6 cuotas precio contado".
-        # OJO: que 3 y 6 cuotas sean SIN INTERÉS (precio contado) depende de la campaña
-        # "Cuotas sin interés" habilitada en la cuenta MercadoPago del vendedor;
-        # esto solo limita el máximo de cuotas mostrado en el checkout.
-        "payment_methods": {"installments": 6},
+        # Tope de 3 cuotas: Digitalseg solo ofrece hasta 3 cuotas SIN INTERÉS (precio contado).
+        # OJO: que esas 3 cuotas sean SIN INTERÉS depende de la campaña "Cuotas sin interés"
+        # habilitada en la cuenta MercadoPago del vendedor; esto solo limita el máximo de
+        # cuotas mostrado en el checkout.
+        "payment_methods": {"installments": 3},
         "metadata": {
             "lead_id":       req.lead_id,
             "cliente":       req.cliente,
@@ -1866,7 +1866,6 @@ def _build_cotizacion_html(
         return f"${round(n):,.0f}".replace(",", ".")
     contado_fmt = _clp(grand_total * 0.95)
     cuota3_fmt  = _clp(grand_total / 3)
-    cuota6_fmt  = _clp(grand_total / 6)
     neto_fmt    = _clp(grand_total / 1.19)
     iva_fmt     = _clp(grand_total - grand_total / 1.19)
     base_ref    = _clp(grand_total)
@@ -1877,8 +1876,6 @@ def _build_cotizacion_html(
         f'<td style="background:#eafaf0;padding:13px 15px;border-radius:0 8px 8px 0;text-align:right;font-weight:900;color:#1b8f4d">{contado_fmt}</td></tr>'
         f'<tr><td style="background:#f6f9fc;padding:13px 15px;border-radius:8px 0 0 8px;color:#0a1b33;font-weight:700">💳 3 cuotas sin interés</td>'
         f'<td style="background:#f6f9fc;padding:13px 15px;border-radius:0 8px 8px 0;text-align:right;font-weight:900;color:#0a1b33">3 × {cuota3_fmt}</td></tr>'
-        f'<tr><td style="background:#f6f9fc;padding:13px 15px;border-radius:8px 0 0 8px;color:#0a1b33;font-weight:700">💳 6 cuotas sin interés</td>'
-        f'<td style="background:#f6f9fc;padding:13px 15px;border-radius:0 8px 8px 0;text-align:right;font-weight:900;color:#0a1b33">6 × {cuota6_fmt}</td></tr>'
         f'<tr><td style="background:#f6f9fc;padding:13px 15px;border-radius:8px 0 0 8px;color:#0a1b33;font-weight:700">🧾 Con factura <span style="font-weight:400;color:#5a6b7c">· IVA recuperable</span></td>'
         f'<td style="background:#f6f9fc;padding:13px 15px;border-radius:0 8px 8px 0;text-align:right;font-weight:700;color:#0a1b33">Neto {neto_fmt}<br><span style="font-weight:400;color:#7a91a9;font-size:12px">+ IVA {iva_fmt}</span></td></tr>'
         '</table>'
