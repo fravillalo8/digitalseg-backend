@@ -52,12 +52,16 @@ _RATE_MAX    = 10
 
 
 def _client_ip(request: Request) -> str:
-    """IP real del cliente. Detrás del proxy de Railway, request.client.host es
-    la IP del proxy (bucket global → auto-DoS); usamos el primer hop de
-    X-Forwarded-For para que el rate-limit sea por cliente."""
+    """IP real del cliente. Detrás del proxy de Railway (único hop de confianza),
+    el ÚLTIMO valor de X-Forwarded-For es el que Railway agregó = la IP real vista
+    por el borde. El PRIMER valor lo puede FALSIFICAR el cliente (mandando su propio
+    header XFF), lo que permitía saltarse el rate-limit con IPs inventadas → no se usa.
+    request.client.host es la IP del proxy (bucket global → auto-DoS), solo fallback."""
     xff = request.headers.get("x-forwarded-for", "")
     if xff:
-        return xff.split(",")[0].strip()
+        parts = [p.strip() for p in xff.split(",") if p.strip()]
+        if parts:
+            return parts[-1]   # hop agregado por Railway, no falsificable por el cliente
     return request.client.host if request.client else "unknown"
 
 
@@ -2535,6 +2539,10 @@ async def portal_codigo(request: Request) -> dict:
     SMTP de Supabase Auth falla con 'Error sending magic link email'). Genera el OTP con
     la Admin API (service_role, SOLO en el server) y lo manda por correo; el navegador
     luego lo verifica con sb.auth.verifyOtp(type:'email'). Sin service_role → 503."""
+    # Rate-limit por IP (10/10min): frena el spam de OTP a correos arbitrarios y la
+    # creación masiva de usuarios Auth. El throttle por-email (45s) no cubre esto porque
+    # el atacante itera con emails distintos.
+    _check_rate(request)
     if not _DS_SUPA_SERVICE:
         raise HTTPException(status_code=503, detail="Login por correo no disponible ahora. Escríbenos por WhatsApp.")
     try:
@@ -2781,7 +2789,7 @@ async def oc_extraer(
     await _verify_crm_user(x_sb_token or "")
 
     # Rate limit: 12 PDF por IP cada 10 min (la extracción es cara)
-    ip = (request.client.host if request.client else "?") or "?"
+    ip = _client_ip(request)
     now = datetime.now().timestamp()
     _oc_rate[ip] = [t for t in _oc_rate[ip] if now - t < 600]
     if len(_oc_rate[ip]) >= 12:
@@ -3011,7 +3019,7 @@ async def enviar_oc_correo(
 @app.post("/api/soporte-ia")
 async def soporte_ia(request: Request) -> dict:
     # Rate limit simple: 20 mensajes por IP cada 10 min
-    ip = (request.client.host if request.client else "?") or "?"
+    ip = _client_ip(request)
     now = datetime.now().timestamp()
     _ia_rate[ip] = [t for t in _ia_rate[ip] if now - t < 600]
     if len(_ia_rate[ip]) >= 20:
@@ -3089,7 +3097,7 @@ Responde SOLO con JSON válido, sin texto extra ni ```:
 
 @app.post("/api/cotizacion/titular")
 async def cotizacion_titular(request: Request) -> dict:
-    ip = (request.client.host if request.client else "?") or "?"
+    ip = _client_ip(request)
     now = datetime.now().timestamp()
     _titular_rate[ip] = [t for t in _titular_rate[ip] if now - t < 600]
     if len(_titular_rate[ip]) >= 15:
@@ -3234,7 +3242,7 @@ def _parse_vision_json(text: str):
 @app.post("/api/cotizador/vision")
 async def cotizador_vision(request: Request) -> dict:
     # Rate limit: 8 fotos por IP cada 10 min (la visión es costosa)
-    ip = (request.client.host if request.client else "?") or "?"
+    ip = _client_ip(request)
     now = datetime.now().timestamp()
     _vision_rate[ip] = [t for t in _vision_rate[ip] if now - t < 600]
     if len(_vision_rate[ip]) >= 8:
@@ -3413,7 +3421,7 @@ def _sim_desc(mid: str) -> str:
 @app.post("/api/cotizador/simulacion")
 async def cotizador_simulacion(request: Request) -> dict:
     # Rate limit estricto: 5 simulaciones por IP cada 10 min (la generación es cara)
-    ip = (request.client.host if request.client else "?") or "?"
+    ip = _client_ip(request)
     now = datetime.now().timestamp()
     _sim_rate[ip] = [t for t in _sim_rate[ip] if now - t < 600]
     if len(_sim_rate[ip]) >= 5:
@@ -3585,7 +3593,7 @@ def _build_reco_email(nombre: str, modelo: str, precio: str, material: str, razo
 
 @app.post("/api/cotizador/enviar-correo")
 async def cotizador_enviar_correo(request: Request) -> dict:
-    ip = (request.client.host if request.client else "?") or "?"
+    ip = _client_ip(request)
     now = datetime.now().timestamp()
     _correo_rate[ip] = [t for t in _correo_rate[ip] if now - t < 600]
     if len(_correo_rate[ip]) >= 10:
@@ -3865,7 +3873,7 @@ async def agenda_disponibilidad() -> dict:
 
 @app.post("/api/instalacion/agendar")
 async def agendar_instalacion(request: Request) -> dict:
-    ip = (request.client.host if request.client else "?") or "?"
+    ip = _client_ip(request)
     now = datetime.now().timestamp()
     _ia_rate[ip] = [t for t in _ia_rate[ip] if now - t < 600]
     if len(_ia_rate[ip]) >= 8:
