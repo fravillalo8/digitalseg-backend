@@ -485,9 +485,9 @@ async def create_lead(payload: LeadPayload, request: Request) -> LeadResponse:
             "p_fecha":        emission,
             "p_vence":        vence,
             "p_estado":       "enviada",
-            "p_telefono":     phone or "",
-            "p_email":        c.email or "",
-            "p_ciudad":       c.ciudad or "",
+            "p_telefono":     _safe_text(phone or "", 40),
+            "p_email":        _safe_text(c.email or "", 120),
+            "p_ciudad":       _safe_text(c.ciudad or "", 80),
             "p_add_pipeline": True,
         })
         if r.status_code == 200:
@@ -3752,8 +3752,12 @@ async def _seguimiento_loop() -> None:
 
 
 @app.get("/api/_run-seguimiento")
-async def _run_seguimiento_ep() -> dict:
-    """Dispara el chequeo de seguimiento manualmente (idempotente: no re-alerta lo ya marcado)."""
+async def _run_seguimiento_ep(x_admin_key: Optional[str] = Header(default=None)) -> dict:
+    """Dispara el chequeo de seguimiento manualmente (idempotente: no re-alerta lo ya marcado).
+    Exige X-Admin-Key: aunque es idempotente y los correos van SOLO al equipo, es un
+    endpoint operativo que dispara envios y escrituras — no debe quedar abierto a internet.
+    El loop automatico (_seguimiento_loop) lo llama internamente sin pasar por aca."""
+    _require_admin(x_admin_key)
     return await _run_seguimiento()
 
 
