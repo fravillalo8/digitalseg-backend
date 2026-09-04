@@ -2123,6 +2123,29 @@ def _resend_reply_to() -> str:
     return os.getenv("RESEND_REPLY_TO", "").strip() or "Sebastián Cabrera <sebastian.cabrera@digitalseg.cl>"
 
 
+def _resend_unsub_mailto() -> str:
+    return os.getenv("RESEND_UNSUB_MAILTO", "").strip() or "contacto@digitalseg.cl"
+
+
+def _html_to_text(html: str) -> str:
+    """Deriva texto plano legible desde el HTML. Gmail penaliza el correo HTML-puro
+    (sin parte text/plain) mandándolo a Promociones/Spam; el text/plain mejora el
+    inbox placement. Conserva el destino de los enlaces como 'texto (https://...)'."""
+    t = html or ""
+    t = re.sub(r"(?is)<(script|style|head)[^>]*>.*?</\1>", " ", t)
+    t = re.sub(r'(?is)<a\b[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
+               lambda m: f"{re.sub(r'(?s)<[^>]+>', '', m.group(2)).strip()} ({m.group(1)})", t)
+    t = re.sub(r"(?is)<br\s*/?>", "\n", t)
+    t = re.sub(r"(?is)</(p|div|tr|li|h[1-6]|table)>", "\n", t)
+    t = re.sub(r"(?s)<[^>]+>", " ", t)
+    from html import unescape as _unescape
+    t = _unescape(t)
+    t = re.sub(r"[ \t]+", " ", t)
+    t = re.sub(r"\n[ \t]+", "\n", t)
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    return t.strip()
+
+
 def _send_via_resend(subject: str, html: str, to_addresses: list[str]) -> tuple[bool, str]:
     """Envía por la API HTTP de Resend (puerto 443). Devuelve (ok, detalle)."""
     api_key = os.getenv("RESEND_API_KEY", "").strip()
@@ -2133,7 +2156,9 @@ def _send_via_resend(subject: str, html: str, to_addresses: list[str]) -> tuple[
             "https://api.resend.com/emails",
             headers={"Authorization": f"Bearer {api_key}"},
             json={"from": _resend_from(), "reply_to": _resend_reply_to(),
-                  "to": to_addresses, "subject": subject, "html": html},
+                  "to": to_addresses, "subject": subject,
+                  "html": html, "text": _html_to_text(html),
+                  "headers": {"List-Unsubscribe": f"<mailto:{_resend_unsub_mailto()}?subject=Baja%20de%20correos>"}},
             timeout=20,
         )
         if r.status_code < 300:
