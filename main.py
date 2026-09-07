@@ -3786,6 +3786,226 @@ async def _run_seguimiento_ep(x_admin_key: Optional[str] = Header(default=None))
     return await _run_seguimiento()
 
 
+# ══════════════════════ SALUDO DE CUMPLEAÑOS (estándar Zentral) ══════════════════
+# Estándar de la suite: el día del cumpleaños se envía un saludo. CLIENTES → cálido;
+# VENDEDORES/staff → entretenido (tono suelto). Reusa el MISMO camino de correo que
+# el resto (_send_email → Resend, dominio verificado, con parte text + List-Unsubscribe).
+#
+# Fuentes de fecha de nacimiento:
+#  · CLIENTES → zentral_data (collection='clientes', items[].fechaNac 'YYYY-MM-DD'),
+#    leído con service_role (no expone PII al navegador). Owner = CRM_OWNER_UID.
+#  · STAFF   → env CUMPLE_STAFF (JSON list [{"nombre","email","fecha":"YYYY-MM-DD"}]),
+#    así los datos del equipo NO viven en git.
+#
+# Idempotencia: se registra "YYYY-MM-DD|email" en zentral_data (collection='cumple_log')
+# para no re-saludar si el cron corre dos veces o el proceso reinicia.
+# Legal: la fecha de nacimiento es dato personal (Ley 19.628/21.719) — se captura como
+# campo OPCIONAL con propósito declarado y consentimiento en la ficha del Core.
+_CRM_OWNER_UID = os.getenv("CRM_OWNER_UID", "167fefde-614d-439d-a926-ebae74f1e352")
+
+
+def _hoy_cl() -> datetime:
+    """Fecha/hora en horario de Chile (evita que el cumpleaños se dispare un día
+    antes/después por correr en UTC)."""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("America/Santiago"))
+    except Exception:
+        # Fallback grosero (UTC-4): suficiente para el mes/día del saludo.
+        return datetime.utcnow() - timedelta(hours=4)
+
+
+async def _supa_service_get(path: str) -> httpx.Response:
+    async with httpx.AsyncClient(timeout=15) as client:
+        return await client.get(
+            f"{_DS_SUPA_URL}/rest/v1/{path}",
+            headers={"apikey": _DS_SUPA_SERVICE, "Authorization": f"Bearer {_DS_SUPA_SERVICE}"},
+        )
+
+
+async def _supa_service_upsert_items(collection: str, items: list) -> bool:
+    async with httpx.AsyncClient(timeout=15) as client:
+        r = await client.post(
+            f"{_DS_SUPA_URL}/rest/v1/zentral_data?on_conflict=user_id,collection",
+            headers={
+                "apikey": _DS_SUPA_SERVICE, "Authorization": f"Bearer {_DS_SUPA_SERVICE}",
+                "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates",
+            },
+            json={"user_id": _CRM_OWNER_UID, "collection": collection,
+                  "items": items, "updated_at": datetime.utcnow().isoformat()},
+        )
+        return r.status_code < 300
+
+
+def _mmdd(fecha: str) -> Optional[tuple[int, int]]:
+    m = re.match(r"^\s*(\d{4})-(\d{2})-(\d{2})", str(fecha or ""))
+    if not m:
+        return None
+    mes, dia = int(m.group(2)), int(m.group(3))
+    if 1 <= mes <= 12 and 1 <= dia <= 31:
+        return (mes, dia)
+    return None
+
+
+def _build_cumple_html(nombre: str, es_staff: bool) -> str:
+    nm = escape((nombre or "").split()[0] or nombre or "")
+    if es_staff:
+        accent = "#8a6cff"
+        head = f"🥳 ¡FELIZ CUMPLE, {nm}!"
+        body = (
+            f"Hoy es TU día, {nm} 🎉 Que se note: parte con la torta, deja los pendientes "
+            "para el yo del futuro y cárgate de buena onda. El equipo entero te manda un abrazo "
+            "gigante — sin ti esto no tendría la misma chispa. 🎂🔥<br><br>"
+            "Que este nuevo año venga con hartas ventas cerradas, cero lunes cuesta arriba "
+            "y todos los cafés que necesites. ¡A brillar! ✨"
+        )
+        firma = "Con cariño (y envidia sana por la torta),<br><b>Todo el equipo DigitalSeg</b>"
+    else:
+        accent = "#3DAA57"
+        head = f"🎂 ¡Feliz cumpleaños, {nm}!"
+        body = (
+            f"Hoy queremos desearte un día muy especial, {nm}. Gracias por la confianza que "
+            "depositas en nosotros — clientes como tú son los que nos motivan a hacer siempre "
+            "un mejor trabajo.<br><br>"
+            "Que este nuevo año te traiga salud, tranquilidad y muchas alegrías. "
+            "¡Lo celebramos contigo! 🎉"
+        )
+        firma = "Un abrazo,<br><b>El equipo de DigitalSeg</b>"
+    return f"""\
+<!doctype html><html lang="es"><body style="margin:0;background:#0f1115;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0f1115;padding:26px 12px;"><tr><td align="center">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:#151922;border-radius:16px;overflow:hidden;border:1px solid #232a36;">
+    <tr><td style="padding:26px 26px 20px;border-bottom:2px solid {accent};text-align:center;">
+      <div style="font-size:42px;line-height:1;">🎂</div>
+      <div style="color:#eef2f7;font:800 23px/1.3 Arial,sans-serif;margin-top:12px;">{head}</div>
+    </td></tr>
+    <tr><td style="padding:24px 28px;color:#c4ccd8;font:400 15px/1.7 Arial,sans-serif;">
+      <p style="margin:0 0 18px;">{body}</p>
+      <p style="margin:22px 0 0;color:#8a94a6;font-size:14px;">{firma}</p>
+    </td></tr>
+  </table>
+  <div style="color:#5a6472;font:400 11px/1.5 Arial,sans-serif;margin-top:14px;">DigitalSeg · digitalseg.cl</div>
+</td></tr></table></body></html>"""
+
+
+async def _run_cumpleanos(confirm: bool = False, test_to: Optional[str] = None,
+                          demo: bool = False) -> dict:
+    """Busca los cumpleaños de HOY (clientes + staff) y envía el saludo.
+    confirm=False → DRY-RUN: lista a quién saludaría, sin enviar ni marcar.
+    test_to → redirige TODOS los envíos a esa dirección (usar delivered@resend.dev
+              para pruebas: NUNCA disparar saludos reales a clientes en pruebas).
+    demo=True (requiere test_to) → manda una muestra cálida (cliente) y una entretenida
+              (staff) a test_to, sin importar si hay cumpleaños hoy. Sólo para verificar
+              el camino de correo/plantilla."""
+    if demo:
+        if not test_to or "@" not in test_to:
+            return {"ok": False, "error": "demo requiere test_to (ej: delivered@resend.dev)"}
+        res = []
+        for nm, staff in [("Cliente de Prueba", False), ("Vendedor de Prueba", True)]:
+            subj = ("🥳 ¡Feliz cumpleaños!" if staff else "🎂 ¡Feliz cumpleaños de parte de DigitalSeg!")
+            ok, info = _send_via_resend(subj, _build_cumple_html(nm, staff), [test_to])
+            res.append({"tipo": "staff" if staff else "cliente", "ok": ok, "info": info[:120]})
+        return {"ok": all(x["ok"] for x in res), "demo": True, "test_to": test_to, "muestras": res}
+    if not _DS_SUPA_SERVICE:
+        return {"ok": False, "error": "sin service_role (DIGITALSEG_SUPABASE_SERVICE_ROLE)"}
+    hoy = _hoy_cl()
+    hoy_md = (hoy.month, hoy.day)
+    hoy_iso = hoy.strftime("%Y-%m-%d")
+
+    # 1) Clientes desde zentral_data
+    candidatos: list[dict] = []
+    try:
+        r = await _supa_service_get(
+            f"zentral_data?user_id=eq.{_CRM_OWNER_UID}&collection=eq.clientes&select=items")
+        if r.status_code == 200 and r.json():
+            items = (r.json()[0] or {}).get("items") or []
+            for c in items:
+                md = _mmdd(c.get("fechaNac"))
+                email = str(c.get("email") or "").strip().lower()
+                if md == hoy_md and "@" in email:
+                    candidatos.append({"nombre": c.get("contacto") or c.get("empresa") or "",
+                                       "email": email, "staff": False})
+    except Exception as e:
+        return {"ok": False, "error": f"lectura clientes: {e}"}
+
+    # 2) Staff desde env CUMPLE_STAFF (JSON)
+    try:
+        staff = json.loads(os.getenv("CUMPLE_STAFF", "[]") or "[]")
+        for s in (staff if isinstance(staff, list) else []):
+            md = _mmdd(s.get("fecha"))
+            email = str(s.get("email") or "").strip().lower()
+            if md == hoy_md and "@" in email:
+                candidatos.append({"nombre": s.get("nombre") or "", "email": email, "staff": True})
+    except Exception as e:
+        log.error("CUMPLE_STAFF inválido: %s", e)
+
+    if not confirm:
+        # DRY-RUN: no enviar, no marcar. No exponer el correo completo.
+        return {"ok": True, "dry_run": True, "fecha": hoy_iso,
+                "cumpleanos_hoy": len(candidatos),
+                "detalle": [{"nombre": c["nombre"], "staff": c["staff"],
+                             "email": c["email"][:2] + "***"} for c in candidatos]}
+
+    # 3) Log de idempotencia (no re-saludar el mismo día)
+    enviados: list[str] = []
+    try:
+        rl = await _supa_service_get(
+            f"zentral_data?user_id=eq.{_CRM_OWNER_UID}&collection=eq.cumple_log&select=items")
+        if rl.status_code == 200 and rl.json():
+            enviados = list((rl.json()[0] or {}).get("items") or [])
+    except Exception:
+        enviados = []
+    # Conservar sólo los últimos ~400 registros para que no crezca sin límite.
+    enviados = enviados[-400:]
+
+    sent = 0
+    errores: list[str] = []
+    skip = 0
+    for c in candidatos:
+        marca = f"{hoy_iso}|{c['email']}"
+        if marca in enviados and not test_to:
+            skip += 1
+            continue
+        destino = [test_to] if test_to else [c["email"]]
+        subject = ("🥳 ¡Feliz cumpleaños!" if c["staff"] else "🎂 ¡Feliz cumpleaños de parte de DigitalSeg!")
+        try:
+            ok, info = _send_via_resend(subject, _build_cumple_html(c["nombre"], c["staff"]), destino)
+            if ok:
+                sent += 1
+                if not test_to:
+                    enviados.append(marca)
+            else:
+                errores.append(f"{c['email'][:2]}***: {info}")
+        except Exception as e:
+            errores.append(f"{c['email'][:2]}***: {type(e).__name__}")
+
+    if not test_to and sent:
+        try:
+            await _supa_service_upsert_items("cumple_log", enviados)
+        except Exception as e:
+            errores.append(f"marcado: {e}")
+
+    return {"ok": len(errores) == 0, "fecha": hoy_iso, "candidatos": len(candidatos),
+            "enviados": sent, "ya_saludados": skip, "test_to": test_to or None,
+            "errores": errores}
+
+
+@app.get("/api/_run-cumpleanos")
+async def _run_cumpleanos_ep(
+    x_admin_key: Optional[str] = Header(default=None),
+    confirm: int = 0,
+    test_to: Optional[str] = None,
+    demo: int = 0,
+) -> dict:
+    """Dispara el saludo de cumpleaños. Exige X-Admin-Key (fail-closed): manda correos.
+    Por defecto DRY-RUN (?confirm=1 para enviar de verdad). ?test_to=delivered@resend.dev
+    redirige TODO a esa dirección para probar sin tocar clientes reales. ?demo=1&test_to=...
+    manda una muestra de cada plantilla a test_to (verifica el correo sin esperar un cumple).
+    Lo gatilla el scheduler diario (com.zentral.cumpleanos-digitalseg) 1 vez al día."""
+    _require_admin(x_admin_key)
+    return await _run_cumpleanos(confirm=(confirm == 1), test_to=test_to, demo=(demo == 1))
+
+
 # ── Importador de LEADS de Odoo → Pipeline Zentral (migración Odoo→suite) ─────────
 # Lee los leads ABIERTOS (activos, no ganados) de Odoo y los siembra en el kanban
 # del CRM vía la RPC pipeline_import_leads (idempotente por odoo_id). Protegido con
