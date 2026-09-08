@@ -81,9 +81,51 @@ class CoreClient:
         )
         r.raise_for_status()
 
+    async def get_stock_map(self) -> dict:
+        """{sku: stock} desde la colección `inventario` (solo ítems con campo `sku`).
+        Lanza excepción si no puede leer — el llamador decide qué hacer (fail-closed)."""
+        if not self.configured:
+            raise RuntimeError("core no configurado")
+        async with httpx.AsyncClient() as client:
+            inv = await self._get_collection(client, "inventario")
+        out: dict = {}
+        for it in inv:
+            sku = str(it.get("sku", "")).strip().lower()
+            if not sku:
+                continue
+            try:
+                out[sku] = int(it.get("stock", 0) or 0)
+            except (TypeError, ValueError):
+                out[sku] = 0
+        return out
+
+    async def _descontar_stock(self, client: httpx.AsyncClient, sku_counts: dict) -> dict:
+        """Descuenta stock del inventario por SKU (piso 0), en un solo read-modify-write.
+        Best-effort: el llamador NO debe romper la venta si esto falla."""
+        if not sku_counts:
+            return {"skipped": True, "reason": "sin skus"}
+        inv = await self._get_collection(client, "inventario")
+        changed: dict = {}
+        for it in inv:
+            sku = str(it.get("sku", "")).strip().lower()
+            if sku not in sku_counts:
+                continue
+            try:
+                cur = int(it.get("stock", 0) or 0)
+            except (TypeError, ValueError):
+                cur = 0
+            new = max(0, cur - int(sku_counts[sku]))
+            it["stock"] = new
+            it["estado"] = "low" if new <= 1 else "ok"
+            changed[sku] = {"antes": cur, "ahora": new}
+        if changed:
+            await self._upsert_collection(client, "inventario", inv)
+        return {"ok": True, "descontado": changed}
+
     async def registrar_venta_mp(self, payment: dict) -> dict:
         """Crea la venta en el Core (documentos) desde un pago MP aprobado.
-        Idempotente por num = MP-<payment_id>. No duplica en reintentos."""
+        Idempotente por num = MP-<payment_id>. No duplica en reintentos.
+        Al crear la venta (no en dedup) descuenta stock por SKU (best-effort)."""
         if not self.configured:
             return {"skipped": True, "reason": "core no configurado"}
 
@@ -141,6 +183,23 @@ class CoreClient:
                 }
                 docs.insert(0, doc)
                 await self._upsert_collection(client, "documentos", docs)
+
+                # Descontar stock por SKU (solo ventas WEB: metadata.skus). Best-effort:
+                # si falla, la venta YA quedó guardada; se registra el aviso y no se rompe.
+                stock_res = None
+                skus_raw = str(meta.get("skus", "") or "")
+                if skus_raw:
+                    sku_counts: dict = {}
+                    for s in skus_raw.split(","):
+                        s = s.strip().lower()
+                        if s:
+                            sku_counts[s] = sku_counts.get(s, 0) + 1
+                    try:
+                        stock_res = await self._descontar_stock(client, sku_counts)
+                        log.info("Core: stock descontado %s", stock_res.get("descontado"))
+                    except Exception as exc:
+                        log.warning("Core: descuento de stock falló (venta OK): %s", exc)
+                        stock_res = {"ok": False, "error": str(exc)}
         except httpx.HTTPStatusError as exc:
             log.error("Core venta MP HTTP %s: %s", exc.response.status_code, exc.response.text[:300])
             return {"ok": False, "error": "http", "status": exc.response.status_code}
@@ -149,4 +208,4 @@ class CoreClient:
             return {"ok": False, "error": str(exc)}
 
         log.info("Core: venta MP registrada num=%s total=%d canal=%s", num, total, "pos" if es_pos else "web")
-        return {"ok": True, "num": num, "total": total, "canal": "pos" if es_pos else "web"}
+        return {"ok": True, "num": num, "total": total, "canal": "pos" if es_pos else "web", "stock": stock_res}

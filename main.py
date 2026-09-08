@@ -1277,6 +1277,47 @@ async def crear_pago(req: PagoRequest, request: Request) -> PagoResponse:
             "currency_id": "CLP",
         })
 
+    # ── REGLA DE STOCK: no vender lo que no tenemos ───────────────────────────
+    # Fuente de verdad = inventario del Core (por SKU). Falla CERRADO: si no se
+    # puede confirmar el stock, se BLOQUEA y se capta el lead (decisión del dueño).
+    sku_needs: dict[str, int] = {}
+    for s in sku_list:
+        sku_needs[s] = sku_needs.get(s, 0) + 1
+    if req.gateway and "gateway-g2" not in sku_list:
+        sku_needs["gateway-g2"] = sku_needs.get("gateway-g2", 0) + 1
+
+    try:
+        stock_map = await core.get_stock_map()
+    except Exception as exc:
+        log.error("Stock no verificable (fail-closed, se bloquea): %s", exc)
+        stock_map = None
+
+    if stock_map is None:
+        agotados = list(sku_needs.keys())          # no se pudo confirmar → bloquear todo
+    else:
+        agotados = [s for s, need in sku_needs.items() if stock_map.get(s, 0) < need]
+
+    if agotados:
+        # Captar el lead server-side (no depender del front): avisar al equipo de ventas.
+        try:
+            wa.notificar_lead_nuevo(
+                nombre=req.cliente or "Cliente web",
+                telefono=req.telefono or "",
+                ciudad="",
+                producto=f"⚠️ AGOTADO/no confirmado — {req.producto or ''} · SKUs: {', '.join(agotados)}",
+                precio=total,
+                odoo_url="",
+            )
+        except Exception as exc:
+            log.warning("Aviso lead 'agotado' no enviado (no bloquea): %s", exc)
+        log.info("Checkout bloqueado por stock: cliente=***%s | agotados=%s", (req.cliente or '')[-3:], agotados)
+        raise HTTPException(status_code=409, detail={
+            "error": "sin_stock",
+            "agotados": agotados,
+            "mensaje": "Uno o más productos no están disponibles en este momento. "
+                       "Dejamos tus datos y te contactamos para gestionar tu pedido a la brevedad.",
+        })
+
     # ── Validar cupón y aplicar descuento ────────────────────────────────────
     discount = 0
     coupon_label = ""
@@ -1329,6 +1370,10 @@ async def crear_pago(req: PagoRequest, request: Request) -> PagoResponse:
             "cupon":         req.cupon or "",
             "descuento_clp": discount,
             "ref_embajador": (req.ref_embajador or "").strip().upper(),
+            # SKUs vendidos (repetidos = cantidad) → el webhook descuenta stock por SKU.
+            "skus":          ",".join(
+                sku_list + (["gateway-g2"] if (req.gateway and "gateway-g2" not in sku_list) else [])
+            ),
         },
     }
     if MP_WEBHOOK_URL:
